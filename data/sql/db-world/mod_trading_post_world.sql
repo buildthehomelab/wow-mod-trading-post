@@ -322,6 +322,11 @@ INSERT INTO `mod_trading_post_activity` (`id`, `theme`, `type`, `target`, `amoun
 (1209, 12, 14, 0, 25, 75, 17, 'Fair Fight', 'Earn 25 honorable kills.'),
 (1210, 12, 1, 1, 80, 50, 18, 'Pelts and Fangs', 'Defeat 80 beasts that would give you experience.');
 
+-- DragonUI's Currency tab takes a row's icon and tooltip from an item the client knows.
+UPDATE `item_template` SET `name` = 'Trader''s Tender', `description` = 'Earned from the Traveler''s Log and the Collector''s Cache. Spent at the Trading Post. Shared by your whole account.' WHERE `entry` = 37711;
+-- Its translations would still call it a test token.
+DELETE FROM `item_template_locale` WHERE `ID` = 37711;
+
 DELETE FROM `creature_template` WHERE `entry` IN (9509000, 9509001);
 INSERT INTO `creature_template` (`entry`, `name`, `subname`, `gossip_menu_id`, `minlevel`, `maxlevel`, `faction`, `npcflag`, `speed_walk`, `speed_run`, `unit_class`, `unit_flags`, `unit_flags2`, `type`, `AIName`, `RegenHealth`, `flags_extra`, `ScriptName`) VALUES
 (9509000, 'Tessa Goodwin', 'Trading Post', 9509000, 60, 60, 35, 1, 1, 1.14286, 1, 768, 2048, 7, '', 1, 2, 'npc_trading_post'),

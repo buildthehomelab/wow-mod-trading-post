@@ -31,7 +31,7 @@ All optional:
 - **mod-individual-progression:** goods with a `phase` stay locked until a character of the account
   reaches it. The generated data puts flying mounts at phase 8.
 - **mod-challenges:** Self-Found characters can't buy.
-- **DragonUI:** the windows wear its look.
+- **DragonUI:** the windows wear its look, and Tender gets a row in its Currency tab.
 
 The generated stock sells items from an item library that isn't part of this module. Rows for items
 your server doesn't have are skipped at startup; fill `mod_trading_post_stock` with your own, or
@@ -76,7 +76,8 @@ them by itself. Purchased mounts and companions stay known by the characters tha
 ## IDs
 
 Creature entries and spawn guids 9509000-9509001, gossip menu and npc text 9509000. The range to
-9509099 is kept free for the module.
+9509099 is kept free for the module. Stock item 37711, an unobtainable test token, is renamed to
+stand for Tender in DragonUI's Currency tab.
 
 ## Developing
 
@@ -97,6 +98,7 @@ Category: Features
   Trader's Tender and the month's bonus mount. Open it with /tlog or from the Journal.
 - **The Collector's Cache** holds another 500 Tender every month. Just visit a proprietor to take it.
 - **Freeze** one item you can't afford yet, and it stays on sale for you until you buy it.
+- Your Tender shows in the Currency tab.
 - Purchases belong to your whole account. Self-Found characters can't earn or spend Tender.
 
 ## License

@@ -84,6 +84,12 @@ namespace
     enum AccountKind : uint8 { KIND_NONE, KIND_MOUNT, KIND_PET };
     constexpr char const* ACCOUNT_TABLES[] = { "", "accountwide_mounts", "accountwide_pets" };
 
+    // DragonUI's Currency tab lists what a server keeps outside the bags, sent as addon whispers with
+    // this prefix. The item gives the row its icon and tooltip.
+    constexpr char const* CURRENCY_PREFIX = DRAGONUI_CURRENCY_PREFIX;
+    constexpr char const* CURRENCY_SECTION = "Account Wallet";
+    constexpr char const* CURRENCY_NAME = "Trader's Tender";
+
     enum StockStatus : uint8 { STATUS_FOR_SALE, STATUS_OWNED, STATUS_LOCKED, STATUS_SELF_FOUND };
 
     struct Settings
@@ -96,6 +102,7 @@ namespace
         bool accountWide = true;
         bool progressionGate = true;
         uint32 progressionLimit = 0;
+        uint32 currencyItem = 37711;
     } settings;
 
     struct Theme
@@ -142,10 +149,13 @@ namespace
         bool logPaid = false;       // set when the reward is queued, so it's only queued once
     };
 
+    // The month and its bonus are kept with the reward: it can still be waiting when the month ends.
     struct PendingReward
     {
         uint32 account = 0;
         uint32 guid = 0;
+        uint32 month = 0;
+        uint32 bonus = 0;
     };
 
     // Everything below is guarded by stateLock, except what only the world thread touches, which
@@ -176,6 +186,7 @@ namespace
     bool progressionQuests = false;
     uint32 flushTimer = 0;
     uint32 monthTimer = 0;
+    std::vector<PendingReward> failedRewards;       // their write failed; tried again with the next save
     AsyncCallbackProcessor<TransactionCallback> commits;
 
     uint32 MonthOf(time_t when)
@@ -255,22 +266,31 @@ namespace
         return balance;
     }
 
-    // The most the account's bonus or purchase could fail to deliver is a mail; the spell of a
-    // shared mount or pet goes in the sharing module's table, in the transaction that pays for it.
     bool SharedWithAccount(ItemInfo const& info)
     {
         return settings.accountWide && info.kind != KIND_NONE && accountTables[info.kind];
     }
 
-    void Deliver(uint32 account, uint32 guid, uint32 item, ItemInfo const& info, CharacterDatabaseTransaction trans)
+    // In the transaction that pays. A shared mount or pet goes into the sharing module's table right
+    // there. Anything else is mailed once that transaction is written (MailPurchase), as a mail lands
+    // in an online character's mailbox before its own write is done: if the payment then failed, the
+    // item would be free. `delivered` says the mail hasn't gone yet, for the next startup to finish.
+    void RecordPurchase(CharacterDatabaseTransaction trans, uint32 account, uint32 guid, uint32 item, ItemInfo const& info, uint32 price, bool shared)
     {
-        if (SharedWithAccount(info))
-        {
+        trans->Append("INSERT IGNORE INTO mod_trading_post_purchase (account, item, at, price, guid, delivered) VALUES ({}, {}, {}, {}, {}, {})",
+            account, item, GameTime::GetGameTime().count(), price, guid, shared ? 1 : 0);
+        if (shared)
             trans->Append("INSERT IGNORE INTO {} (account_id, spell) VALUES ({}, {})", ACCOUNT_TABLES[info.kind], account, info.teaches);
+    }
+
+    void MailPurchase(uint32 account, uint32 guid, uint32 item, ItemInfo const& info)
+    {
+        // An account with no character left has nobody to mail: the row waits for a later startup.
+        if (!guid)
             return;
-        }
 
         Player* online = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(guid));
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
         MailDraft draft(fmt::format("Your order: {}", info.name),
             fmt::format("Here's your {}. Pleasure doing business.\n\n-- The Trading Post", info.name));
         if (Item* mailed = Item::CreateItem(item, 1, online))
@@ -279,6 +299,12 @@ namespace
             draft.AddItem(mailed);
         }
         draft.SendMailTo(trans, MailReceiver(online, guid), MailSender(MAIL_CREATURE, NPC_MAIL_SENDER), MAIL_CHECK_MASK_NONE, 0, MAIL_DAYS);
+        trans->Append("UPDATE mod_trading_post_purchase SET delivered = 1 WHERE account = {} AND item = {}", account, item);
+        commits.AddCallback(CharacterDatabase.AsyncCommitTransaction(trans)).AfterComplete([account, item](bool success)
+        {
+            if (!success)
+                LOG_ERROR("module", "mod-trading-post: the mail with item {} for account {} could not be saved; the next startup sends it", item, account);
+        });
     }
 
     // After the write is done: the character in the game learns what its account now has. Later
@@ -533,19 +559,20 @@ namespace
             return;
         }
 
-        uint32 const balance = Pay(account, settings.cacheTender);
+        // Spendable once it's written, so nothing can be spent that a failed write takes back.
         CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-        Record(trans, account, guid, settings.cacheTender, balance, "cache", 0);
+        Record(trans, account, guid, settings.cacheTender, Balance(account) + settings.cacheTender, "cache", 0);
         trans->Append("INSERT INTO mod_trading_post_month (account, month, cache_taken) VALUES ({}, {}, 1) "
             "ON DUPLICATE KEY UPDATE cache_taken = 1", account, month);
         commits.AddCallback(CharacterDatabase.AsyncCommitTransaction(trans)).AfterComplete(
             [account, month, amount = settings.cacheTender](bool success)
             {
                 Player* player = AccountPlayer(account);
-                if (!success)
+                if (success)
+                    Pay(account, amount);
+                else
                 {
                     std::lock_guard<std::mutex> guard(stateLock);
-                    balances[account] -= std::min(balances[account], amount);
                     if (currentMonth == month)
                         accounts[account].cacheTaken = false;
                     LOG_ERROR("module", "mod-trading-post: the Collector's Cache of account {} could not be saved", account);
@@ -554,6 +581,7 @@ namespace
                 {
                     Send(player, fmt::format("C:{}", success ? 1 : 0));
                     SendState(player);
+                    TradingPost::SendCurrency(player);
                 }
             });
     }
@@ -615,14 +643,13 @@ namespace
 
         CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
         Record(trans, account, guid, -int64(good.price), balance, "buy", item);
-        trans->Append("INSERT IGNORE INTO mod_trading_post_purchase (account, item, at, price) VALUES ({}, {}, {}, {})",
-            account, item, GameTime::GetGameTime().count(), good.price);
+        bool const shared = SharedWithAccount(info);
+        RecordPurchase(trans, account, guid, item, info, good.price, shared);
         if (wasFrozen)
             trans->Append("DELETE FROM mod_trading_post_frozen WHERE account = {}", account);
-        Deliver(account, guid, item, info, trans);
 
         commits.AddCallback(CharacterDatabase.AsyncCommitTransaction(trans)).AfterComplete(
-            [account, item, info, price = good.price, wasFrozen](bool success)
+            [account, guid, item, info, shared, price = good.price, wasFrozen](bool success)
             {
                 {
                     std::lock_guard<std::mutex> guard(stateLock);
@@ -637,14 +664,20 @@ namespace
                     }
                 }
                 if (success)
-                    TeachOnline(account, info);
+                {
+                    if (shared)
+                        TeachOnline(account, info);
+                    else
+                        MailPurchase(account, guid, item, info);
+                }
                 if (Player* player = AccountPlayer(account))
                 {
                     if (success)
-                        ChatHandler(player->GetSession()).PSendSysMessage(SharedWithAccount(info)
+                        ChatHandler(player->GetSession()).PSendSysMessage(shared
                             ? "The {} is yours now, on every character of your account."
                             : "The Trading Post has mailed you the {}. Check your mailbox.", info.name);
                     Send(player, fmt::format("B:{}:{}", item, success ? 1 : 0));
+                    TradingPost::SendCurrency(player);
                 }
             });
     }
@@ -728,18 +761,14 @@ namespace
     void PayRewards()
     {
         std::vector<PendingReward> rewards;
-        uint32 bonus;
-        uint32 month;
         {
             std::lock_guard<std::mutex> guard(stateLock);
             rewards.swap(pendingRewards);
-            bonus = themes[currentTheme].bonusItem;
-            month = currentMonth;
         }
 
         for (PendingReward const& reward : rewards)
         {
-            uint32 const balance = Pay(reward.account, settings.logTender);
+            uint32 const bonus = reward.bonus;
 
             ItemInfo info;
             bool giveBonus = false;
@@ -755,42 +784,50 @@ namespace
             }
 
             CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-            Record(trans, reward.account, reward.guid, settings.logTender, balance, "log", 0);
+            // Spendable once it's written, so nothing can be spent that a failed write takes back.
+            Record(trans, reward.account, reward.guid, settings.logTender, Balance(reward.account) + settings.logTender, "log", 0);
             trans->Append("INSERT INTO mod_trading_post_month (account, month, log_paid) VALUES ({}, {}, 1) "
-                "ON DUPLICATE KEY UPDATE log_paid = 1", reward.account, month);
+                "ON DUPLICATE KEY UPDATE log_paid = 1", reward.account, reward.month);
+            bool const shared = giveBonus && SharedWithAccount(info);
             if (giveBonus)
-            {
-                trans->Append("INSERT IGNORE INTO mod_trading_post_purchase (account, item, at, price) VALUES ({}, {}, {}, 0)",
-                    reward.account, bonus, GameTime::GetGameTime().count());
-                Deliver(reward.account, reward.guid, bonus, info, trans);
-            }
+                RecordPurchase(trans, reward.account, reward.guid, bonus, info, 0, shared);
 
             commits.AddCallback(CharacterDatabase.AsyncCommitTransaction(trans)).AfterComplete(
-                [account = reward.account, month, bonus, info, giveBonus, tender = settings.logTender](bool success)
+                [reward, info, giveBonus, shared, tender = settings.logTender](bool success)
                 {
+                    uint32 const account = reward.account;
+                    uint32 const bonus = reward.bonus;
                     if (!success)
                     {
-                        std::lock_guard<std::mutex> guard(stateLock);
-                        balances[account] -= std::min(balances[account], tender);
                         if (giveBonus)
+                        {
+                            std::lock_guard<std::mutex> guard(stateLock);
                             purchases[account].erase(bonus);
-                        if (currentMonth == month)
-                            accounts[account].logPaid = false;
-                        LOG_ERROR("module", "mod-trading-post: the Traveler's Log reward of account {} could not be saved", account);
+                        }
+                        // The month's flag stays up: this try again is the only one due.
+                        failedRewards.push_back(reward);
+                        LOG_ERROR("module", "mod-trading-post: the Traveler's Log reward of account {} could not be saved; will try again", account);
                         return;
                     }
 
+                    Pay(account, tender);
                     if (giveBonus)
-                        TeachOnline(account, info);
+                    {
+                        if (shared)
+                            TeachOnline(account, info);
+                        else
+                            MailPurchase(account, reward.guid, bonus, info);
+                    }
                     if (Player* player = AccountPlayer(account))
                     {
                         ChatHandler chat(player->GetSession());
                         chat.PSendSysMessage("Traveler's Log complete! You earned {} Trader's Tender.", tender);
                         if (giveBonus)
-                            chat.PSendSysMessage(SharedWithAccount(info)
+                            chat.PSendSysMessage(shared
                                 ? "This month's reward, the {}, is yours on every character of your account."
                                 : "This month's reward, the {}, is in your mailbox.", info.name);
                         SendState(player);
+                        TradingPost::SendCurrency(player);
                     }
                 });
         }
@@ -903,12 +940,60 @@ namespace
             if (QueryResult result = CharacterDatabase.Query("SELECT guid FROM characters WHERE account = {} ORDER BY logout_time DESC LIMIT 1", account))
                 guid = result->Fetch()[0].Get<uint32>();
             std::lock_guard<std::mutex> guard(stateLock);
-            pendingRewards.push_back({ account, guid });
+            pendingRewards.push_back({ account, guid, month, themes[theme].bonusItem });
         }
 
-        // A month's progress is no use once it's over; the claims stay as history.
-        if (!keepAccounts)
-            CharacterDatabase.Execute("DELETE FROM mod_trading_post_progress WHERE month < {}", month);
+    }
+
+    // Startup only, when no write is still on its way: a month that ended with its reward unpaid,
+    // because the write failed or the server stopped first. A month's progress is no use after
+    // that, so it goes; the claims stay as history.
+    void RecoverPastRewards(uint32 month)
+    {
+        struct PastActivity { uint8 theme; uint32 amount; uint32 points; };
+        std::unordered_map<uint32, PastActivity> activities;
+        if (QueryResult result = WorldDatabase.Query("SELECT id, theme, amount, points FROM mod_trading_post_activity"))
+            do
+            {
+                Field* fields = result->Fetch();
+                activities[fields[0].Get<uint32>()] = { fields[1].Get<uint8>(), fields[2].Get<uint32>(), fields[3].Get<uint32>() };
+            } while (result->NextRow());
+
+        std::map<std::pair<uint32, uint32>, uint32> earned;     // account, month -> points
+        if (QueryResult result = CharacterDatabase.Query("SELECT account, month, activity, progress FROM mod_trading_post_progress WHERE month < {}", month))
+            do
+            {
+                Field* fields = result->Fetch();
+                uint32 const pastMonth = fields[1].Get<uint32>();
+                auto activity = activities.find(fields[2].Get<uint32>());
+                if (activity != activities.end() && (!activity->second.theme || activity->second.theme == pastMonth % 100)
+                    && fields[3].Get<uint32>() >= activity->second.amount)
+                    earned[{ fields[0].Get<uint32>(), pastMonth }] += activity->second.points;
+            } while (result->NextRow());
+
+        std::set<std::pair<uint32, uint32>> paid;
+        if (QueryResult result = CharacterDatabase.Query("SELECT account, month FROM mod_trading_post_month WHERE month < {} AND log_paid = 1", month))
+            do
+            {
+                Field* fields = result->Fetch();
+                paid.emplace(fields[0].Get<uint32>(), fields[1].Get<uint32>());
+            } while (result->NextRow());
+
+        for (auto const& [key, points] : earned)
+        {
+            if (points < settings.logPoints || paid.count(key))
+                continue;
+
+            uint32 guid = 0;
+            if (QueryResult result = CharacterDatabase.Query("SELECT guid FROM characters WHERE account = {} ORDER BY logout_time DESC LIMIT 1", key.first))
+                guid = result->Fetch()[0].Get<uint32>();
+
+            LOG_INFO("server.loading", "mod-trading-post: paying account {} the Traveler's Log reward of month {}", key.first, key.second);
+            std::lock_guard<std::mutex> guard(stateLock);
+            pendingRewards.push_back({ key.first, guid, key.second, themes[key.second % 100].bonusItem });
+        }
+
+        CharacterDatabase.Execute("DELETE FROM mod_trading_post_progress WHERE month < {}", month);
     }
 
     bool FindAccountTable(uint8 kind)
@@ -994,7 +1079,22 @@ void TradingPost::Adjust(uint32 account, int64 amount)
     Record(trans, account, 0, amount, balance, "gm", 0);
     CharacterDatabase.CommitTransaction(trans);
     if (Player* player = AccountPlayer(account))
+    {
         SendState(player);
+        SendCurrency(player);
+    }
+}
+
+void TradingPost::SendCurrency(Player* player)
+{
+    if (!settings.enabled || !settings.currencyItem || !IsRealPlayer(player))
+        return;
+
+    std::string const message = fmt::format("{}\tS:{}:{}:{}:{}", CURRENCY_PREFIX, settings.currencyItem,
+        Balance(player->GetSession()->GetAccountId()), CURRENCY_SECTION, CURRENCY_NAME);
+    WorldPacket data;
+    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, message);
+    player->GetSession()->SendPacket(&data);
 }
 
 void TradingPost::LoadConfig()
@@ -1008,6 +1108,7 @@ void TradingPost::LoadConfig()
     settings.progressionGate = sConfigMgr->GetOption<bool>("TradingPost.ProgressionGate", true);
     // mod-individual-progression's own: no phase past it, 0 = none
     settings.progressionLimit = sConfigMgr->GetOption<uint32>("IndividualProgression.ProgressionLimit", 0);
+    settings.currencyItem = sConfigMgr->GetOption<uint32>("TradingPost.CurrencyItem", 37711);
 }
 
 static void LoadData(bool withAccounts)
@@ -1122,7 +1223,24 @@ static void LoadData(bool withAccounts)
         }
     }
 
+    // Paid for, and the server stopped before the mail went.
+    if (withAccounts)
+        if (QueryResult result = CharacterDatabase.Query("SELECT account, guid, item FROM mod_trading_post_purchase WHERE delivered = 0"))
+            do
+            {
+                Field* fields = result->Fetch();
+                uint32 const item = fields[2].Get<uint32>();
+                // It may have left the shelves since it was paid for.
+                ItemInfo info;
+                if (ReadItem(item, info))
+                    MailPurchase(fields[0].Get<uint32>(), fields[1].Get<uint32>(), item, info);
+                else
+                    LOG_ERROR("server.loading", "mod-trading-post: account {} paid for item {}, which no longer exists", fields[0].Get<uint32>(), item);
+            } while (result->NextRow());
+
     time_t const now = GameTime::GetGameTime().count();
+    if (withAccounts)
+        RecoverPastRewards(MonthOf(now));
     LoadMonth(now, !withAccounts && MonthOf(now) == currentMonth);
     LOG_INFO("server.loading", "mod-trading-post: month {} '{}', {} activities, {} goods ({} skipped), {} wallet(s)",
         currentMonth, themes[currentTheme].name, monthActivities.size(), goodsCount, skipped, balances.size());
@@ -1219,7 +1337,7 @@ void TradingPost::Progress(Player* player, ActivityType type, uint32 target, uin
             if (!state->logPaid && state->points >= settings.logPoints)
             {
                 state->logPaid = true;
-                pendingRewards.push_back({ account, guid });
+                pendingRewards.push_back({ account, guid, currentMonth, themes[currentTheme].bonusItem });
             }
         }
         wantsAddon = addonPlayers.count(guid) != 0;
@@ -1248,6 +1366,13 @@ void TradingPost::Update(uint32 diff)
     {
         flushTimer = 0;
         FlushProgress();
+
+        if (!failedRewards.empty())
+        {
+            std::lock_guard<std::mutex> guard(stateLock);
+            pendingRewards.insert(pendingRewards.end(), failedRewards.begin(), failedRewards.end());
+            failedRewards.clear();
+        }
     }
 
     monthTimer += diff;

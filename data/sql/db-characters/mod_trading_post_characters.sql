@@ -42,8 +42,21 @@ CREATE TABLE IF NOT EXISTS `mod_trading_post_purchase` (
   `item` INT UNSIGNED NOT NULL,
   `at` BIGINT NOT NULL,
   `price` INT UNSIGNED NOT NULL DEFAULT 0,
-  PRIMARY KEY (`account`, `item`)
+  `guid` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'who a mailed purchase goes to',
+  `delivered` TINYINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '0: paid, the mail has not gone yet',
+  PRIMARY KEY (`account`, `item`),
+  KEY `delivered` (`delivered`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- A purchase table from before mailed goods waited for their payment to be written.
+SET @tp_has_delivered := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'mod_trading_post_purchase' AND COLUMN_NAME = 'delivered');
+SET @tp_add_delivered := IF(@tp_has_delivered = 0,
+    'ALTER TABLE `mod_trading_post_purchase` ADD COLUMN `guid` INT UNSIGNED NOT NULL DEFAULT 0, ADD COLUMN `delivered` TINYINT UNSIGNED NOT NULL DEFAULT 1, ADD KEY `delivered` (`delivered`)',
+    'SELECT 1');
+PREPARE tp_statement FROM @tp_add_delivered;
+EXECUTE tp_statement;
+DEALLOCATE PREPARE tp_statement;
 
 CREATE TABLE IF NOT EXISTS `mod_trading_post_frozen` (
   `account` INT UNSIGNED NOT NULL,
