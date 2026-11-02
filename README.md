@@ -31,7 +31,7 @@ All optional:
 - **mod-individual-progression:** goods with a `phase` stay locked until a character of the account
   reaches it. The generated data puts flying mounts at phase 8.
 - **mod-challenges:** Self-Found characters can't buy.
-- **DragonUI:** the windows wear its look, and Tender gets a row in its Currency tab.
+- **DragonUI:** the windows take its border and buttons, and Tender gets a row in its Currency tab.
 
 The generated stock sells items from an item library that isn't part of this module. Rows for items
 your server doesn't have are skipped at startup; fill `mod_trading_post_stock` with your own, or
@@ -83,6 +83,7 @@ stand for Tender in DragonUI's Currency tab.
 
 ```bash
 python3 tools/build_data.py
+python3 tools/build_art.py --cache <dir>   # only when the set of art pieces changes
 lua tools/addon_smoke_test.lua addon/TradingPost
 ```
 
@@ -103,4 +104,5 @@ Category: Features
 
 ## License
 
-MIT
+MIT, except `addon/TradingPost/Art`: those textures are cut from Blizzard Entertainment's World of
+Warcraft interface art, which remains theirs and isn't covered by this license.
