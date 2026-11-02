@@ -7,6 +7,7 @@ DELETE FROM `creature_template_model` WHERE `CreatureID` IN (9509000, 9509001);
 DELETE FROM `creature_template` WHERE `entry` IN (9509000, 9509001);
 DELETE FROM `gossip_menu` WHERE `MenuID` = 9509000;
 DELETE FROM `npc_text` WHERE `ID` = 9509000;
+UPDATE `item_template` SET `name` = 'Currency Token Test Token 1', `description` = 'A test token for the Currency Token system' WHERE `entry` = 37711;
 DROP TABLE IF EXISTS `mod_trading_post_activity`;
 DROP TABLE IF EXISTS `mod_trading_post_stock`;
 DROP TABLE IF EXISTS `mod_trading_post_theme`;

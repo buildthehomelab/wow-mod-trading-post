@@ -96,6 +96,10 @@ namespace TradingPost
 
     bool Enabled();
     uint32 Balance(uint32 account);
+
+    // The balance's row in DragonUI's Currency tab.
+    constexpr char const* DRAGONUI_CURRENCY_PREFIX = "DUI_CURRENCY";
+    void SendCurrency(Player* player);
     void Adjust(uint32 account, int64 amount);
 }
 

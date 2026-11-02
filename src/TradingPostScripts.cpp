@@ -11,6 +11,7 @@
 #include "Chat.h"
 #include "ChatCommand.h"
 #include "Creature.h"
+#include "DBCStores.h"
 #include "GameObject.h"
 #include "GossipDef.h"
 #include "Group.h"
@@ -21,6 +22,8 @@
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "ScriptedGossip.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "WorldSession.h"
 
 using namespace TradingPost;
@@ -65,7 +68,7 @@ public:
             PLAYERHOOK_ON_ACHI_COMPLETE,
             PLAYERHOOK_ON_UPDATE_GATHERING_SKILL,
             PLAYERHOOK_ON_UPDATE_FISHING_SKILL,
-            PLAYERHOOK_ON_CREATE_ITEM,
+            PLAYERHOOK_ON_UPDATE_CRAFTING_SKILL,
             PLAYERHOOK_ON_VICTIM_REWARD_AFTER,
         }) { }
 
@@ -74,6 +77,14 @@ public:
     {
         if (lang != LANG_ADDON || !receiver || receiver != player)
             return true;
+
+        // DragonUI asks for its currencies by whispering itself. It's let through, so that any other
+        // module listing one gets to answer too.
+        if (msg == std::string(DRAGONUI_CURRENCY_PREFIX) + "\tHELLO")
+        {
+            SendCurrency(player);
+            return true;
+        }
 
         std::string const prefixTab = std::string(PREFIX) + "\t";
         if (msg.compare(0, prefixTab.size(), prefixTab) != 0)
@@ -155,10 +166,16 @@ public:
         return true;
     }
 
-    void OnPlayerCreateItem(Player* player, Item* item, uint32 /*count*/) override
+    // Fires for a spell on any skill line that makes or enchants something: a mage's water too.
+    void OnPlayerUpdateCraftingSkill(Player* player, SkillLineAbilityEntry const* skill, uint32 /*currentLevel*/, uint32& /*gain*/) override
     {
-        // A mage's water is no craft.
-        if (item && !item->GetTemplate()->HasFlag(ITEM_FLAG_CONJURED))
+        SkillLineEntry const* line = skill ? sSkillLineStore.LookupEntry(skill->SkillLine) : nullptr;
+        if (!line || (line->categoryId != SKILL_CATEGORY_PROFESSION && line->categoryId != SKILL_CATEGORY_SECONDARY))
+            return;
+
+        // Disenchanting comes here too, and it takes an item apart.
+        SpellInfo const* spell = sSpellMgr->GetSpellInfo(skill->Spell);
+        if (spell && !spell->HasEffect(SPELL_EFFECT_DISENCHANT))
             Progress(player, ACTIVITY_CRAFT);
     }
 

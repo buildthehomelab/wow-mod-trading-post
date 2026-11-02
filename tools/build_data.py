@@ -21,6 +21,9 @@ SQL = ROOT / "data" / "sql" / "db-world" / "mod_trading_post_world.sql"
 NPC_ALLIANCE = 9509000
 NPC_HORDE = 9509001
 TEXT_NO_ADDON = 9509000
+CURRENCY_ITEM = 37711   # "Currency Token Test Token 1": in every client, obtainable nowhere
+CURRENCY_NAME = "Trader's Tender"
+CURRENCY_TEXT = "Earned from the Traveler's Log and the Collector's Cache. Spent at the Trading Post. Shared by your whole account."
 
 PRICE_GROUND = 600
 PRICE_FLYER = 800
@@ -241,6 +244,11 @@ def write_sql():
             ",\n".join(rows) + ";", ""]
 
     out += [
+        "-- DragonUI's Currency tab takes a row's icon and tooltip from an item the client knows.",
+        f"UPDATE `item_template` SET `name` = {q(CURRENCY_NAME)}, `description` = {q(CURRENCY_TEXT)} WHERE `entry` = {CURRENCY_ITEM};",
+        "-- Its translations would still call it a test token.",
+        f"DELETE FROM `item_template_locale` WHERE `ID` = {CURRENCY_ITEM};",
+        "",
         f"DELETE FROM `creature_template` WHERE `entry` IN ({NPC_ALLIANCE}, {NPC_HORDE});",
         "INSERT INTO `creature_template` (`entry`, `name`, `subname`, `gossip_menu_id`, `minlevel`, `maxlevel`, `faction`, `npcflag`, `speed_walk`, `speed_run`, `unit_class`, `unit_flags`, `unit_flags2`, `type`, `AIName`, `RegenHealth`, `flags_extra`, `ScriptName`) VALUES",
         f"({NPC_ALLIANCE}, 'Tessa Goodwin', 'Trading Post', {TEXT_NO_ADDON}, 60, 60, 35, 1, 1, 1.14286, 1, 768, 2048, 7, '', 1, 2, 'npc_trading_post'),",

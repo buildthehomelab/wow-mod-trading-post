@@ -61,6 +61,16 @@ TradingPost.Log.SaveSeconds = 30
 TradingPost.AccountWideSpells = 1
 
 #
+#    TradingPost.CurrencyItem
+#        Description: The item whose icon and tooltip stand for Tender in DragonUI's Currency tab.
+#                     The world SQL renames this one, a test token nothing else uses, and drops its
+#                     translated names. 0: no row.
+#        Default:     37711
+#
+
+TradingPost.CurrencyItem = 37711
+
+#
 #    TradingPost.ProgressionGate
 #        Description: 1: goods with a phase in mod_trading_post_stock stay locked until a character
 #                     of the account reaches that mod-individual-progression phase. Without that
