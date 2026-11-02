@@ -1,7 +1,7 @@
 -- Smoke test for the TradingPost addon outside the game: stubs just enough of the 3.3.5a API, loads
 -- the addon in .toc order and plays a fake server through the real protocol code.
 -- Usage (any Lua 5.3+): lua tools/addon_smoke_test.lua addon/TradingPost
--- DRAGON=1 adds a DragonUI stand-in, JOURNAL=1 a Journal stand-in that takes tabs.
+-- DRAGON=1 adds a DragonUI stand-in, JOURNAL=1 a Journal stand-in that takes tabs, HORDE=1 plays the Horde.
 
 local addonDir = arg[1] or "addon/TradingPost"
 local dragon = os.getenv("DRAGON") == "1"
@@ -98,6 +98,7 @@ YES, NO, OKAY, CANCEL = "Yes", "No", "Okay", "Cancel"
 GameTooltip = newObject("GameTooltip", "GameTooltip")
 DEFAULT_CHAT_FRAME = { AddMessage = function (_, text) print("chat: " .. text) end }
 function UnitName() return "Tester" end
+function UnitFactionGroup() return os.getenv("HORDE") == "1" and "Horde" or "Alliance" end
 local cursorX, buttonsDown = 0, {}
 function GetCursorPosition() return cursorX, 0 end
 function IsMouseButtonDown(button) return buttonsDown[button] end
@@ -219,6 +220,37 @@ check(#T.activities == 2 and T.activities[1].progress == 10, "activities read")
 server("P:1:11:175")
 check(T.activities[1].progress == 11 and T.state.points == 175, "one activity moves")
 server("P:99:1:175")   -- not on the list: nothing happens
+
+-- What's under way comes first and what's finished sinks; the filters narrow it down.
+do
+	local rows, filters = {}, {}
+	for _, f in ipairs(frames) do
+		if f.paper then rows[#rows + 1] = f end
+		if f.filter then filters[f.filter.key] = f end
+	end
+	check(rows[1].name:GetText() == "Keeping the Roads Clear" and rows[2].name:GetText() == "Odd Jobs", "finished activities sink")
+	check(rows[2].check:IsShown() and not rows[2].bar:IsShown(), "a finished activity is ticked off")
+	check(rows[1].bar:IsShown() and rows[1].bar.text:GetText() == "11 / 200", "one under way shows how far")
+	filters.done.__scripts.OnClick(filters.done)
+	check(rows[1].name:GetText() == "Odd Jobs" and not rows[2]:IsShown(), "the Completed filter")
+	check(filters.done.count:GetText() == "1" and filters.all.count:GetText() == "2", "filters count")
+	filters.all.__scripts.OnClick(filters.all)
+	check(rows[2]:IsShown(), "back to all")
+end
+
+-- The bonus item's details can land after the state, and its name follows when they do.
+do
+	local panel = journal and tabs.travelerslog.panel
+	for _, f in ipairs(frames) do
+		if f.bonusWatch then panel = f end
+	end
+	itemsKnown = false
+	server("S:900:202611:175:1000:0:0:500:500:864000:0:401")
+	check(panel.bonus.name:GetText() == "" and panel.bonusWatch:IsShown(), "waits for the bonus item's name")
+	itemsKnown = true
+	tick(1)
+	check(panel.bonus.name:GetText() == "Armored Irontusk" and not panel.bonusWatch:IsShown(), "and shows it when it lands")
+end
 
 -- The shop.
 sent = {}
@@ -420,8 +452,19 @@ check(popups[#popups].which == "TRADINGPOST_FREEZE", "replacing a frozen good as
 server("SI:401^600^0^1^9001^1^")
 server("SE")
 check(shop.freeze:GetText() == "Thaw", "a frozen good offers Thaw")
+check(shop.hold.good and shop.hold.good.item == 401 and shop.frost:IsShown(), "a frozen good sits in the slot, frost on the stage")
+for _, f in ipairs(frames) do
+	check(not (f.good and f.good.item == 401 and f ~= shop.hold and f:IsShown()), "and leaves the list")
+end
 shop.freeze.__scripts.OnClick(shop.freeze)
 check(popups[#popups].which == "TRADINGPOST_THAW", "thawing asks first")
+
+-- A frozen good the stock no longer lists still shows in the slot, so it agrees with Freeze.
+server("S:900:202611:175:1000:0:0:500:500:864000:402:401")
+server("SI:401^600^0^0^9001^1^")
+server("SE")
+check(shop.hold.good == nil and shop.hold.name:GetText() == "Amber Skitterfly", "the slot names what the state says is frozen")
+server("S:900:202611:175:1000:0:0:500:500:864000:0:401")
 
 -- The cache.
 sent = {}
