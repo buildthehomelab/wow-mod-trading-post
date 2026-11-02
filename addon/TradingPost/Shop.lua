@@ -239,17 +239,12 @@ local function build()
 	frame.model = CreateFrame("PlayerModel", nil, stage)
 	frame.model:SetPoint("TOPLEFT", stage, "TOPLEFT", 6, -6)
 	frame.model:SetPoint("BOTTOMRIGHT", stage, "BOTTOMRIGHT", -6, 76)
-	frame.model:EnableMouse(true)
-	frame.model.facing = 0.5
-	frame.model:SetScript("OnMouseDown", function (self) self.turning = GetCursorPosition() end)
-	frame.model:SetScript("OnMouseUp", function (self) self.turning = nil end)
-	frame.model:SetScript("OnUpdate", function (self)
-		if not self.turning then return end
-		local x = GetCursorPosition()
-		self.facing = (self.facing or 0) + (x - self.turning) * 0.012
-		self.turning = x
-		self:SetFacing(self.facing)
-	end)
+	-- A hidden model can drop what it showed, so it loads again when it next shows: the window
+	-- opening, or the whole interface coming back from Alt-Z or a cinematic.
+	frame.model:SetScript("OnHide", function (self) self.shownEntry = nil end)
+	frame.model:SetScript("OnShow", refreshDetail)
+	ModelViewLib.Wire(frame.model, 0.5)
+	ModelViewLib.AddHint(frame.model)
 
 	frame.detailName = T.Label(stage, "GameFontNormal")
 	frame.detailName:SetPoint("TOPLEFT", frame.model, "BOTTOMLEFT", 4, -6)

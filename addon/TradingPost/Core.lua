@@ -170,10 +170,16 @@ events:SetScript("OnUpdate", function (self, elapsed)
 	T.Send("HELLO:" .. T.PROTOCOL)
 end)
 
+events:RegisterEvent("ADDON_LOADED")
 events:RegisterEvent("PLAYER_ENTERING_WORLD")
 events:RegisterEvent("CHAT_MSG_ADDON")
 events:SetScript("OnEvent", function (self, event, prefix, message, _, sender)
-	if event == "PLAYER_ENTERING_WORLD" then
+	if event == "ADDON_LOADED" then
+		if prefix == "TradingPost" then
+			TradingPostDB = TradingPostDB or {}
+			ModelViewLib.Bind(TradingPostDB)
+		end
+	elseif event == "PLAYER_ENTERING_WORLD" then
 		if not T.ready then
 			helloLeft, helloWait = HELLO_TRIES, 1
 			self:Show()
