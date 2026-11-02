@@ -75,7 +75,10 @@ function methods:GetFrameLevel() return self.__level end
 function methods:GetWidth() return 300 end
 function methods:GetHeight() return 300 end
 function methods:GetModel() return self.__model end
-function methods:SetCreature(entry) self.__creature = entry; if self.__records and self.__records[entry] then self.__model = "x.m2" end end
+function methods:SetModelScale(scale) self.__scale = scale end
+function methods:SetPosition(depth, x, y) self.__x, self.__y = x, y end
+function methods:SetFacing(facing) self.__facing = facing end
+function methods:SetCreature(entry) self.__scaleAtLoad = self.__scale; self.__creature = entry; if self.__records and self.__records[entry] then self.__model = "x.m2" end end
 function methods:ClearModel() self.__model = nil end
 function methods:SetValue(value) self.__value = value end
 
@@ -95,7 +98,10 @@ YES, NO, OKAY, CANCEL = "Yes", "No", "Okay", "Cancel"
 GameTooltip = newObject("GameTooltip", "GameTooltip")
 DEFAULT_CHAT_FRAME = { AddMessage = function (_, text) print("chat: " .. text) end }
 function UnitName() return "Tester" end
-function GetCursorPosition() return 0, 0 end
+local cursorX, buttonsDown = 0, {}
+function GetCursorPosition() return cursorX, 0 end
+function IsMouseButtonDown(button) return buttonsDown[button] end
+function time() return math.floor(now or 0) end
 function PlaySound() end
 
 local itemNames = { [401] = "Armored Irontusk", [402] = "Amber Skitterfly", [403] = "Pet Rock" }
@@ -183,6 +189,9 @@ local function sentThing(message)
 	return false
 end
 
+events.__scripts.OnEvent(events, "ADDON_LOADED", "TradingPost")
+check(TradingPostDB.modelViews == ModelViewLib.views, "views are saved with the addon")
+
 -- Hello, tried until answered.
 events.__scripts.OnEvent(events, "PLAYER_ENTERING_WORLD")
 tick(2)
@@ -230,6 +239,144 @@ itemsKnown = true
 tick(1)
 check(shop.detailName:GetText() == "Armored Irontusk", "name appears when it lands")
 check(shop.buy:IsEnabled(), "can buy with 900 Tender")
+
+-- The preview: each creature keeps the view it was given, and every load starts from neutral.
+do
+	local model = shop.model
+	model.__records = { [9001] = true, [9002] = true, [9003] = true }
+	-- One pass sets the creature again and it draws; the next one frames it.
+	tick(1)
+	tick(1)
+	check(model.__model == "x.m2" and model.__scale == 1, "an untouched creature has the default view")
+	check(next(ModelViewLib.views) == nil, "looking at one saves nothing")
+
+	model.__scripts.OnMouseWheel(model, -1)
+	local zoomed = model.__scale
+	check(zoomed < 1, "the wheel zooms out")
+	buttonsDown.LeftButton = true
+	model.__scripts.OnMouseDown(model, "LeftButton")
+	cursorX = 100
+	tick(0.1)
+	check(math.abs(model.__facing - 1.7) < 0.001, "a drag turns it")
+	buttonsDown.LeftButton = nil
+	tick(0.1)
+	cursorX = 200
+	tick(0.1)
+	check(math.abs(model.__facing - 1.7) < 0.001, "letting go stops the turning")
+	buttonsDown.RightButton = true
+	model.__scripts.OnMouseDown(model, "RightButton")
+	cursorX = 300
+	tick(0.1)
+	buttonsDown.RightButton = nil
+	check(model.__x and model.__x > 1, "a right drag moves it")
+	local moved = model.__x
+
+	local function choose(item)
+		for _, f in ipairs(frames) do
+			if f.good and f.good.item == item then f.__scripts.OnClick(f) return end
+		end
+	end
+	choose(403)
+	check(model.__creature == 9003 and model.__scaleAtLoad == 1, "the next creature loads from neutral")
+	check(model.__scale == 1 and model.__x == 0, "and has its own view")
+	check(math.abs(model.__facing - 0.5) < 0.001, "and its own facing")
+	choose(401)
+	check(model.__scaleAtLoad == 1, "a zoomed creature loads from neutral too")
+	check(model.__scale == zoomed and model.__x == moved, "coming back restores the view")
+	check(math.abs(model.__y - -0.15 * (zoomed - 1)) < 0.001, "the height follows the zoom, which is anchored on the feet")
+	-- The swap lands a few frames after the call and takes the scale with it.
+	model.__scale = 1
+	tick(0.1)
+	check(model.__scale == zoomed, "the view is set again while the swap lands")
+	tick(2)
+	model.__scale = 1
+	tick(0.1)
+	check(model.__scale == 1, "and only for a moment")
+	model.__scale = zoomed
+
+	-- With the hold on, the model stays neutral through the landing and takes its view after.
+	ModelViewLib.holdSeconds = 0.3
+	choose(403)
+	choose(401)
+	check(model.__scale == 1, "held: no view yet")
+	tick(0.1)
+	check(model.__scale == 1, "held: still none")
+	tick(0.3)
+	tick(0.1)
+	check(model.__scale == zoomed, "held: the view comes after")
+	-- A long frame, as a slow model load makes, runs out the hold and the settling at once.
+	choose(403)
+	choose(401)
+	tick(5)
+	check(model.__scale == zoomed, "held: a long frame still sets the view")
+	ModelViewLib.holdSeconds = 0
+	tick(2)
+
+	-- A reply while the interface is hidden (Alt-Z) loads nothing, and showing again does.
+	local loads = 0
+	local setCreature = methods.SetCreature
+	methods.SetCreature = function (self, entry) loads = loads + 1; setCreature(self, entry) end
+	model.__scripts.OnHide(model)
+	model.__shown = false
+	T.ShowCreature(model, 9001)
+	check(loads == 0, "a hidden model doesn't load")
+	model.__shown = true
+	model.__scripts.OnShow(model)
+	check(loads == 1 and model.__scale == zoomed, "showing it again loads it, with its view")
+	methods.SetCreature = setCreature
+	tick(2)
+
+	-- In the client a window's children hear OnHide with it; here the model is told by hand.
+	shop:Hide()
+	model.__scripts.OnHide(model)
+	check(model.__scale == 1, "a hidden model is left neutral")
+	server("OPEN")
+	server("SI:401^600^0^0^9001^1^")
+	server("SI:402^800^2^0^9002^1^Comes to the realm with The Burning Crusade.")
+	server("SI:403^250^1^0^9003^2^")
+	server("SE")
+	check(model.__scaleAtLoad == 1 and model.__scale == zoomed, "reopening restores the view")
+
+	model.__scripts.OnMouseDown(model, "MiddleButton")
+	check(model.__scale == 1 and model.__x == 0 and ModelViewLib.views[9001] == nil, "a middle click resets it")
+
+	-- How far it moves grows with the zoom, and comes back in with it.
+	buttonsDown.RightButton = true
+	model.__scripts.OnMouseDown(model, "RightButton")
+	cursorX = cursorX + 5000
+	tick(0.1)
+	check(model.__x == 1.5, "moving stops at the limit")
+	for _ = 1, 12 do model.__scripts.OnMouseWheel(model, 1) end
+	check(model.__scale == 4, "zooming in stops at the limit")
+	cursorX = cursorX + 5000
+	tick(0.1)
+	check(model.__x == 6, "zoomed in, it moves further")
+	for _ = 1, 12 do model.__scripts.OnMouseWheel(model, -1) end
+	check(model.__x == 1.5, "zooming back out brings it back in")
+	buttonsDown.RightButton = nil
+	tick(0.1)
+	model.__scripts.OnMouseDown(model, "MiddleButton")
+
+	-- Saved views from another addon: the later change to a creature wins.
+	ModelViewLib.views[77] = { zoom = 2, at = 50 }
+	ModelViewLib.Bind({ modelViews = { [77] = { zoom = 3, at = 10 }, [78] = { zoom = 3, at = 10 } } })
+	check(ModelViewLib.views[77].zoom == 2 and ModelViewLib.views[78].zoom == 3, "older views don't overwrite newer ones")
+	ModelViewLib.Bind({ modelViews = { [77] = { zoom = 4, at = 90 } } })
+	check(ModelViewLib.views[77].zoom == 4, "a newer view wins")
+	ModelViewLib.views[77], ModelViewLib.views[78] = nil, nil
+
+	-- A second copy of the file, as another addon brings: it changes nothing, and a newer one keeps
+	-- the views.
+	ModelViewLib.views[79] = { zoom = 2, at = 1 }
+	local lib = ModelViewLib
+	local wire = lib.Wire
+	assert(loadfile(addonDir .. "/ModelView.lua"))()
+	check(ModelViewLib == lib and lib.Wire == wire, "the same version doesn't replace itself")
+	lib.version = 0
+	assert(loadfile(addonDir .. "/ModelView.lua"))()
+	check(ModelViewLib == lib and lib.Wire ~= wire and lib.views[79].zoom == 2, "a newer copy keeps the views")
+	lib.views[79] = nil
+end
 
 -- A locked good can't be bought or frozen.
 local rowOf = {}

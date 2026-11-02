@@ -92,7 +92,7 @@ Category: Features
 
 - **The Trading Post is open.** Find a proprietor by the auction house in Stormwind or Orgrimmar.
   Every month brings a new theme and a new shelf of mounts and companions, each with a model to
-  turn around before you buy.
+  turn, zoom and move around before you buy. The view is remembered for each one.
 - **The Traveler's Log** lists 18 things to do each month, from quests and bosses to crafting,
   fishing and battlegrounds. Everything your account does counts. Reach 1,000 points for 500
   Trader's Tender and the month's bonus mount. Open it with /tlog or from the Journal.

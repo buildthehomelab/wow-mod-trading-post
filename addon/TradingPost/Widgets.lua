@@ -147,8 +147,8 @@ loader:SetScript("OnUpdate", function (self, elapsed)
 	local any = false
 	for model in pairs(pending) do
 		model.tries = (model.tries or 0) + 1
-		if drawn(model) or model.tries > MAX_TRIES or not model:IsVisible() then
-			if drawn(model) then model:SetFacing(model.facing or 0.5) end
+		if drawn(model) or model.tries > MAX_TRIES or not model:IsVisible() or not model.shownEntry then
+			if drawn(model) and model.shownEntry then ModelViewLib.Frame(model, model.shownEntry) end
 			pending[model] = nil
 		else
 			model:SetCreature(model.shownEntry)
@@ -159,7 +159,14 @@ loader:SetScript("OnUpdate", function (self, elapsed)
 end)
 
 function T.ShowCreature(model, entry)
+	-- A reply can land while the interface is hidden: the model's OnShow comes back for it.
+	if not model:IsVisible() then
+		model.shownEntry = nil
+		pending[model] = nil
+		return
+	end
 	if not entry or entry == 0 then
+		ModelViewLib.BeforeLoad(model)
 		model:ClearModel()
 		model.shownEntry = nil
 		pending[model] = nil
@@ -168,10 +175,11 @@ function T.ShowCreature(model, entry)
 	if model.shownEntry == entry then return end
 	model.shownEntry = entry
 	model.tries = 0
+	ModelViewLib.BeforeLoad(model)
 	model:ClearModel()
 	model:SetCreature(entry)
 	if drawn(model) then
-		model:SetFacing(model.facing or 0.5)
+		ModelViewLib.Frame(model, entry)
 		pending[model] = nil
 	else
 		if not asked[entry] then
