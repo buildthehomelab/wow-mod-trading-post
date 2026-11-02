@@ -42,6 +42,7 @@
 #include "Item.h"
 #include "Log.h"
 #include "Mail.h"
+#include "MailMgr.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
@@ -158,6 +159,14 @@ namespace
         uint32 bonus = 0;
     };
 
+    struct FailedMail
+    {
+        uint32 account = 0;
+        uint32 guid = 0;
+        uint32 item = 0;
+        ItemInfo info;
+    };
+
     // Everything below is guarded by stateLock, except what only the world thread touches, which
     // says so. No query or packet goes out while it's held.
     std::mutex stateLock;
@@ -187,6 +196,7 @@ namespace
     uint32 flushTimer = 0;
     uint32 monthTimer = 0;
     std::vector<PendingReward> failedRewards;       // their write failed; tried again with the next save
+    std::vector<FailedMail> failedMails;            // likewise
     AsyncCallbackProcessor<TransactionCallback> commits;
 
     uint32 MonthOf(time_t when)
@@ -272,9 +282,9 @@ namespace
     }
 
     // In the transaction that pays. A shared mount or pet goes into the sharing module's table right
-    // there. Anything else is mailed once that transaction is written (MailPurchase), as a mail lands
-    // in an online character's mailbox before its own write is done: if the payment then failed, the
-    // item would be free. `delivered` says the mail hasn't gone yet, for the next startup to finish.
+    // there. Anything else is mailed once that transaction is written (MailPurchase), so a failed
+    // payment never leaves a free item. `delivered` says the mail hasn't gone yet, for the next
+    // startup to finish.
     void RecordPurchase(CharacterDatabaseTransaction trans, uint32 account, uint32 guid, uint32 item, ItemInfo const& info, uint32 price, bool shared)
     {
         trans->Append("INSERT IGNORE INTO mod_trading_post_purchase (account, item, at, price, guid, delivered) VALUES ({}, {}, {}, {}, {}, {})",
@@ -289,21 +299,94 @@ namespace
         if (!guid)
             return;
 
-        Player* online = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(guid));
-        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-        MailDraft draft(fmt::format("Your order: {}", info.name),
-            fmt::format("Here's your {}. Pleasure doing business.\n\n-- The Trading Post", info.name));
-        if (Item* mailed = Item::CreateItem(item, 1, online))
+        Item* mailed = Item::CreateItem(item, 1, nullptr);
+        if (!mailed)
         {
-            mailed->SaveToDB(trans);
-            draft.AddItem(mailed);
+            LOG_ERROR("module", "mod-trading-post: could not make item {} to mail to account {}", item, account);
+            return;
         }
-        draft.SendMailTo(trans, MailReceiver(online, guid), MailSender(MAIL_CREATURE, NPC_MAIL_SENDER), MAIL_CHECK_MASK_NONE, 0, MAIL_DAYS);
+
+        // Not MailDraft: it fills an online character's mailbox before the write is done. A write
+        // that then failed would leave a mail they can empty and a row that sends it again. Here
+        // the mailbox hears of it once it's written, so `delivered` is always the truth.
+        ObjectGuid const receiver = ObjectGuid::Create<HighGuid::Player>(guid);
+        mailed->SetOwnerGUID(receiver);
+
+        uint32 const mailId = sObjectMgr->GenerateMailID();
+        time_t const deliverTime = GameTime::GetGameTime().count();
+        time_t const expireTime = deliverTime + MAIL_DAYS * DAY;
+        std::string const subject = fmt::format("Your order: {}", info.name);
+        std::string const body = fmt::format("Here's your {}. Pleasure doing business.\n\n-- The Trading Post", info.name);
+
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+        mailed->SaveToDB(trans);
+
+        uint8 index = 0;
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_MAIL);
+        stmt->SetData(  index, mailId);
+        stmt->SetData(++index, uint8(MAIL_CREATURE));
+        stmt->SetData(++index, int8(MAIL_STATIONERY_DEFAULT));
+        stmt->SetData(++index, uint16(0));
+        stmt->SetData(++index, NPC_MAIL_SENDER);
+        stmt->SetData(++index, guid);
+        stmt->SetData(++index, subject);
+        stmt->SetData(++index, body);
+        stmt->SetData(++index, true);
+        stmt->SetData(++index, uint32(expireTime));
+        stmt->SetData(++index, uint32(deliverTime));
+        stmt->SetData(++index, uint32(0));
+        stmt->SetData(++index, uint32(0));
+        stmt->SetData(++index, uint8(MAIL_CHECK_MASK_NONE));
+        trans->Append(stmt);
+
+        stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_MAIL_ITEM);
+        stmt->SetData(0, mailId);
+        stmt->SetData(1, mailed->GetGUID().GetCounter());
+        stmt->SetData(2, guid);
+        trans->Append(stmt);
+
         trans->Append("UPDATE mod_trading_post_purchase SET delivered = 1 WHERE account = {} AND item = {}", account, item);
-        commits.AddCallback(CharacterDatabase.AsyncCommitTransaction(trans)).AfterComplete([account, item](bool success)
+        commits.AddCallback(CharacterDatabase.AsyncCommitTransaction(trans)).AfterComplete(
+            [account, guid, item, info, receiver, mailed, mailId, deliverTime, expireTime, subject, body](bool success)
         {
             if (!success)
-                LOG_ERROR("module", "mod-trading-post: the mail with item {} for account {} could not be saved; the next startup sends it", item, account);
+            {
+                delete mailed;
+                failedMails.push_back({ account, guid, item, info });
+                LOG_ERROR("module", "mod-trading-post: the mail with item {} for account {} could not be saved; will try again", item, account);
+                return;
+            }
+
+            sMailMgr->OnMailSent(guid);
+
+            // Offline, or logged in just now and read it from the database: its next load has it.
+            Player* online = ObjectAccessor::FindConnectedPlayer(receiver);
+            if (!online || online->GetMail(mailId))
+            {
+                delete mailed;
+                return;
+            }
+
+            Mail* mail = new Mail;
+            mail->messageID = mailId;
+            mail->mailTemplateId = 0;
+            mail->subject = subject;
+            mail->body = body;
+            mail->money = 0;
+            mail->COD = 0;
+            mail->AddItem(mailed->GetGUID().GetCounter(), mailed->GetEntry());
+            mail->messageType = MAIL_CREATURE;
+            mail->stationery = MAIL_STATIONERY_DEFAULT;
+            mail->sender = NPC_MAIL_SENDER;
+            mail->receiver = guid;
+            mail->expire_time = expireTime;
+            mail->deliver_time = deliverTime;
+            mail->checked = MAIL_CHECK_MASK_NONE;
+            mail->state = MAIL_STATE_UNCHANGED;
+
+            online->AddMail(mail);
+            online->AddMItem(mailed);
+            online->AddNewMailDeliverTime(deliverTime);
         });
     }
 
@@ -1373,6 +1456,11 @@ void TradingPost::Update(uint32 diff)
             pendingRewards.insert(pendingRewards.end(), failedRewards.begin(), failedRewards.end());
             failedRewards.clear();
         }
+
+        std::vector<FailedMail> mails;
+        mails.swap(failedMails);
+        for (FailedMail const& mail : mails)
+            MailPurchase(mail.account, mail.guid, mail.item, mail.info);
     }
 
     monthTimer += diff;
