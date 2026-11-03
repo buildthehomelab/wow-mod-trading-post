@@ -12,6 +12,7 @@ T.STATUS_FOR_SALE, T.STATUS_OWNED, T.STATUS_LOCKED, T.STATUS_SELF_FOUND = 0, 1, 
 T.state = nil
 T.theme = { name = "", description = "" }
 T.activities = {}
+T.milestones = {}
 T.stock = {}
 T.ready = false
 
@@ -56,6 +57,14 @@ local handlers = {}
 function handlers.H(rest)
 	T.ready = true
 	T.Fire("READY", tonumber(rest))
+end
+
+-- Comes just ahead of the state, which is what redraws.
+function handlers.G(rest)
+	T.milestones = {}
+	for points, tender in rest:gmatch("(%d+):(%d+)") do
+		T.milestones[#T.milestones + 1] = { points = tonumber(points), tender = tonumber(tender) }
+	end
 end
 
 function handlers.S(rest)

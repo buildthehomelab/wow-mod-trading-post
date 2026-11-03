@@ -112,19 +112,60 @@ local function refreshFilters(panel)
 	end
 end
 
+local function milestonesOf(state)
+	if #T.milestones > 0 then return T.milestones end
+	return { { points = state.needed, tender = state.logPays } }
+end
+
+local function nextMilestone(state)
+	if state.logDone then return nil end
+	for _, milestone in ipairs(milestonesOf(state)) do
+		if state.points < milestone.points then return milestone end
+	end
+	return nil
+end
+
+-- A diamond on the bar for each milestone, the last at its right end. Sits by width, which is 0 until
+-- the bar has been laid out, so this also runs when its size changes.
+local function refreshMarkers(panel)
+	local state = T.state
+	if not state then return end
+	local list = milestonesOf(state)
+	local width = panel.total:GetWidth() or 0
+	local last = list[#list].points
+	for index, milestone in ipairs(list) do
+		local marker = panel.markers[index]
+		if not marker then
+			marker = panel.markerHolder:CreateTexture(nil, "OVERLAY")
+			panel.markers[index] = marker
+		end
+		T.Art(marker, "log", state.points >= milestone.points and "complete_diamond" or "incomplete_diamond", true)
+		marker:ClearAllPoints()
+		marker:SetPoint("CENTER", panel.total, "LEFT", width * milestone.points / last, 0)
+		marker:Show()
+	end
+	for index = #list + 1, #panel.markers do panel.markers[index]:Hide() end
+end
+
 local function refreshReward(panel, state)
 	local chest = T.Capital()
 	T.Art(panel.chest, "log", "chest_" .. chest, true)
 	T.Art(panel.chestGlow, "log", "chest_" .. chest .. "_glow", true)
 	T.SetShown(panel.chestGlow, state.logDone)
-	panel.rewardTitle:SetText(state.logDone and "|cff33cc33Reward Earned|r" or "This Month's Reward")
-	panel.rewardTender:SetText(state.logPays)
+	local nextUp = nextMilestone(state)
+	if nextUp then
+		panel.rewardTitle:SetText("Next Reward: " .. nextUp.points .. " Points")
+		panel.rewardTender:SetText(nextUp.tender)
+	else
+		panel.rewardTitle:SetText("|cff33cc33Reward Earned|r")
+		panel.rewardTender:SetText(state.logPays)
+	end
 
 	if state.bonus ~= 0 then
 		panel.bonus.item = state.bonus
 		panel.bonus.icon:SetTexture(T.ItemIcon(state.bonus))
 		local name = T.ItemName(state.bonus)
-		panel.bonus.name:SetText(name or "")
+		panel.bonus.name:SetText(name and (name .. "\n|cffb0b0b0at " .. state.needed .. " points|r") or "")
 		-- The server sends the item's details just ahead of the state, but they can land after it.
 		if not name and not panel.bonusWatch:IsShown() then
 			panel.bonusWatch.tries = 0
@@ -147,7 +188,7 @@ local function refresh(panel)
 		panel.tender:SetText(state.balance)
 		T.SetBar(panel.total, math.min(state.points / math.max(state.needed, 1), 1), state.logDone and "bar_fill_bonus" or "bar_fill")
 		panel.total.value:SetText(state.points .. " / " .. state.needed)
-		T.Art(panel.marker, "log", state.logDone and "complete_diamond" or "incomplete_diamond", true)
+		refreshMarkers(panel)
 		refreshReward(panel, state)
 	end
 
@@ -195,11 +236,11 @@ local function buildHeader(panel)
 	panel.total.value = T.Label(panel.total, "GameFontHighlight")
 	panel.total.value:SetPoint("RIGHT", panel.total, "RIGHT", -30, 0)
 
-	local markerHolder = CreateFrame("Frame", nil, panel.total)
-	markerHolder:SetAllPoints(panel.total)
-	markerHolder:SetFrameLevel(panel.total:GetFrameLevel() + 2)
-	panel.marker = markerHolder:CreateTexture(nil, "OVERLAY")
-	panel.marker:SetPoint("CENTER", panel.total, "RIGHT", 0, 0)
+	panel.markerHolder = CreateFrame("Frame", nil, panel.total)
+	panel.markerHolder:SetAllPoints(panel.total)
+	panel.markerHolder:SetFrameLevel(panel.total:GetFrameLevel() + 2)
+	panel.markers = {}
+	panel.total:HookScript("OnSizeChanged", function () refreshMarkers(panel) end)
 
 	local divider = T.Tex(panel, "BORDER", "log", "divider")
 	divider:SetHeight(2)

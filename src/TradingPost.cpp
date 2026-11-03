@@ -3,8 +3,8 @@
  *
  * The month is the server's local calendar month, and its theme is the month's number, so twelve
  * themes come round again every year. Hooks on the map threads count activity under one lock, and
- * the writes they cause wait for the world thread (Update): progress goes out every so often, the
- * log's reward as soon as it's earned.
+ * the writes they cause wait for the world thread (Update): progress goes out every so often, a
+ * milestone's reward as soon as it's earned.
  *
  *   world       mod_trading_post_theme, _stock, _activity
  *   characters  mod_trading_post_wallet, _ledger     account -> Tender, and every change
@@ -14,6 +14,7 @@
  * Addon messages are whispers to oneself on prefix TPOST, one row each:
  *   client   HELLO:<protocol>  STATE  LOG  STOCK  CACHE  BUY:<item>  FREEZE:<item, 0 thaws>  R:<creature>
  *   server   H:<protocol>      the hello's answer
+ *            G:<points>:<tender>:<points>:<tender>...   the log's milestones
  *            S:<balance>:<month>:<points>:<needed>:<cache taken>:<log done>:<cache pays>:<log pays>:<seconds left>:<frozen>:<bonus item>
  *            T:<theme>^<description>
  *            LA:<id>^<amount>^<progress>^<points>^<name>^<description>   LE    the activity list
@@ -51,6 +52,7 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "Timer.h"
+#include "Tokenize.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include "WorldSessionMgr.h"
@@ -93,12 +95,21 @@ namespace
 
     enum StockStatus : uint8 { STATUS_FOR_SALE, STATUS_OWNED, STATUS_LOCKED, STATUS_SELF_FOUND };
 
+    struct Milestone
+    {
+        uint32 points = 0;
+        uint32 tender = 0;
+    };
+
+    constexpr char const* DEFAULT_MILESTONES = "250:100,500:100,750:100,1000:200";
+
     struct Settings
     {
         bool enabled = true;
         uint32 cacheTender = 500;
-        uint32 logTender = 500;
-        uint32 logPoints = 1000;
+        std::vector<Milestone> milestones;      // ascending, never empty once loaded; under stateLock
+        uint32 logTender = 500;                 // all of them together
+        uint32 logPoints = 1000;                // the last one, which completes the log
         uint32 flushMs = 30 * IN_MILLISECONDS;
         bool accountWide = true;
         bool progressionGate = true;
@@ -147,15 +158,20 @@ namespace
         std::unordered_map<uint32, uint32> progress;
         uint32 points = 0;
         bool cacheTaken = false;
-        bool logPaid = false;       // set when the reward is queued, so it's only queued once
+        uint32 paidPoints = 0;      // the last milestone queued, so that it's only queued once
+        bool logPaid = false;       // the last milestone of all is
     };
 
     // The month and its bonus are kept with the reward: it can still be waiting when the month ends.
+    // Milestones reached together are one reward.
     struct PendingReward
     {
         uint32 account = 0;
         uint32 guid = 0;
         uint32 month = 0;
+        uint32 tender = 0;
+        uint32 paidPoints = 0;
+        bool last = false;          // completes the log
         uint32 bonus = 0;
     };
 
@@ -196,6 +212,7 @@ namespace
     uint32 flushTimer = 0;
     uint32 monthTimer = 0;
     std::vector<PendingReward> failedRewards;       // their write failed; tried again with the next save
+    std::unordered_set<uint32> rewardsInFlight;     // account: a reward being written, or failed and waiting
     std::vector<FailedMail> failedMails;            // likewise
     AsyncCallbackProcessor<TransactionCallback> commits;
 
@@ -238,6 +255,23 @@ namespace
     {
         auto const [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
         return error == std::errc() && end == text.data() + text.size();
+    }
+
+    // "250:100,500:100": ascending points, each with the Tender it pays.
+    std::vector<Milestone> ParseMilestones(std::string const& text)
+    {
+        std::vector<Milestone> parsed;
+        for (std::string_view entry : Acore::Tokenize(text, ',', false))
+        {
+            size_t const colon = entry.find(':');
+            Milestone milestone;
+            if (colon == std::string_view::npos || !ParseUInt(entry.substr(0, colon), milestone.points)
+                || !ParseUInt(entry.substr(colon + 1), milestone.tender) || !milestone.points
+                || (!parsed.empty() && milestone.points <= parsed.back().points))
+                return {};
+            parsed.push_back(milestone);
+        }
+        return parsed;
     }
 
     void Send(Player* player, std::string const& payload)
@@ -499,6 +533,7 @@ namespace
     {
         uint32 const account = player->GetSession()->GetAccountId();
         uint32 balance, month, points = 0, frozenItem = 0, bonus;
+        std::string milestones = "G";
         bool cacheTaken = false, logPaid = false;
         std::string themeName, themeDescription;
         {
@@ -514,6 +549,8 @@ namespace
             }
             if (auto itr = frozen.find(account); itr != frozen.end())
                 frozenItem = itr->second;
+            for (Milestone const& milestone : settings.milestones)
+                milestones += fmt::format(":{}:{}", milestone.points, milestone.tender);
             bonus = themes[currentTheme].bonusItem;
             themeName = themes[currentTheme].name;
             themeDescription = themes[currentTheme].description;
@@ -523,6 +560,7 @@ namespace
             SendItemDetails(player, bonus);
         if (frozenItem)
             SendItemDetails(player, frozenItem);
+        Send(player, milestones);
         Send(player, fmt::format("S:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}", balance, month, points, settings.logPoints, cacheTaken ? 1 : 0,
             logPaid ? 1 : 0, settings.cacheTender, settings.logTender, SecondsLeftInMonth(), frozenItem, bonus));
         Send(player, fmt::format("T:{}^{}", Clean(themeName), Clean(themeDescription)));
@@ -840,6 +878,41 @@ namespace
         CharacterDatabase.CommitTransaction(trans);
     }
 
+    // The milestones past what's been paid that these points reach, as one reward: false if there are
+    // none. Caller holds stateLock.
+    bool DueReward(uint32 paidPoints, uint32 points, uint32 month, PendingReward& reward)
+    {
+        for (Milestone const& milestone : settings.milestones)
+            if (milestone.points > paidPoints && milestone.points <= points)
+            {
+                reward.tender += milestone.tender;
+                reward.paidPoints = milestone.points;
+            }
+        // The milestones were lowered past what's been paid: no more Tender, but the log is complete.
+        uint32 const lastPoints = settings.milestones.back().points;
+        if (!reward.paidPoints && paidPoints >= lastPoints && points >= lastPoints)
+            reward.paidPoints = paidPoints;
+        if (!reward.paidPoints)
+            return false;
+
+        reward.month = month;
+        reward.last = reward.paidPoints >= lastPoints;
+        reward.bonus = reward.last ? themes[month % 100].bonusItem : 0;
+        return true;
+    }
+
+    // The same for an account's current month, marked as queued. Caller holds stateLock.
+    bool TakeDueReward(AccountMonth& state, uint32 account, uint32 month, PendingReward& reward)
+    {
+        if (state.logPaid || !DueReward(state.paidPoints, state.points, month, reward))
+            return false;
+
+        reward.account = account;
+        state.paidPoints = reward.paidPoints;
+        state.logPaid = reward.last;
+        return true;
+    }
+
     // Pays the log's rewards that came due. World thread.
     void PayRewards()
     {
@@ -849,8 +922,17 @@ namespace
             rewards.swap(pendingRewards);
         }
 
+        std::vector<PendingReward> held;
         for (PendingReward const& reward : rewards)
         {
+            // One at a time for an account. The month's row only remembers the highest milestone
+            // paid, so a later one written past a failed write would hide it from the next startup.
+            if (!rewardsInFlight.insert(reward.account).second)
+            {
+                held.push_back(reward);
+                continue;
+            }
+
             uint32 const bonus = reward.bonus;
 
             ItemInfo info;
@@ -868,15 +950,17 @@ namespace
 
             CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
             // Spendable once it's written, so nothing can be spent that a failed write takes back.
-            Record(trans, reward.account, reward.guid, settings.logTender, Balance(reward.account) + settings.logTender, "log", 0);
-            trans->Append("INSERT INTO mod_trading_post_month (account, month, log_paid) VALUES ({}, {}, 1) "
-                "ON DUPLICATE KEY UPDATE log_paid = 1", reward.account, reward.month);
+            Record(trans, reward.account, reward.guid, reward.tender, Balance(reward.account) + reward.tender, "log", 0);
+            // In either order: a reward that failed comes back after later ones.
+            trans->Append("INSERT INTO mod_trading_post_month (account, month, log_paid, log_points) VALUES ({}, {}, {}, {}) "
+                "ON DUPLICATE KEY UPDATE log_paid = GREATEST(log_paid, VALUES(log_paid)), log_points = GREATEST(log_points, VALUES(log_points))",
+                reward.account, reward.month, reward.last ? 1 : 0, reward.paidPoints);
             bool const shared = giveBonus && SharedWithAccount(info);
             if (giveBonus)
                 RecordPurchase(trans, reward.account, reward.guid, bonus, info, 0, shared);
 
             commits.AddCallback(CharacterDatabase.AsyncCommitTransaction(trans)).AfterComplete(
-                [reward, info, giveBonus, shared, tender = settings.logTender](bool success)
+                [reward, info, giveBonus, shared](bool success)
                 {
                     uint32 const account = reward.account;
                     uint32 const bonus = reward.bonus;
@@ -893,7 +977,8 @@ namespace
                         return;
                     }
 
-                    Pay(account, tender);
+                    rewardsInFlight.erase(account);
+                    Pay(account, reward.tender);
                     if (giveBonus)
                     {
                         if (shared)
@@ -904,7 +989,10 @@ namespace
                     if (Player* player = AccountPlayer(account))
                     {
                         ChatHandler chat(player->GetSession());
-                        chat.PSendSysMessage("Traveler's Log complete! You earned {} Trader's Tender.", tender);
+                        if (reward.last)
+                            chat.PSendSysMessage("Traveler's Log complete! You earned {} Trader's Tender.", reward.tender);
+                        else
+                            chat.PSendSysMessage("Traveler's Log: {} points reached! You earned {} Trader's Tender.", reward.paidPoints, reward.tender);
                         if (giveBonus)
                             chat.PSendSysMessage(shared
                                 ? "This month's reward, the {}, is yours on every character of your account."
@@ -913,6 +1001,13 @@ namespace
                         TradingPost::SendCurrency(player);
                     }
                 });
+        }
+
+        // Ahead of anything that came in meanwhile, which is for higher milestones.
+        if (!held.empty())
+        {
+            std::lock_guard<std::mutex> guard(stateLock);
+            pendingRewards.insert(pendingRewards.begin(), held.begin(), held.end());
         }
     }
 
@@ -963,10 +1058,10 @@ namespace
         if (!keepAccounts)
         {
             progress = CharacterDatabase.Query("SELECT account, activity, progress FROM mod_trading_post_progress WHERE month = {}", month);
-            claims = CharacterDatabase.Query("SELECT account, cache_taken, log_paid FROM mod_trading_post_month WHERE month = {}", month);
+            claims = CharacterDatabase.Query("SELECT account, cache_taken, log_paid, log_points FROM mod_trading_post_month WHERE month = {}", month);
         }
 
-        std::vector<uint32> uncollected;
+        std::vector<PendingReward> uncollected;
         {
             std::lock_guard<std::mutex> guard(stateLock);
             currentMonth = month;
@@ -1006,29 +1101,29 @@ namespace
                     AccountMonth& state = accounts[fields[0].Get<uint32>()];
                     state.cacheTaken = fields[1].Get<uint8>() != 0;
                     state.logPaid = fields[2].Get<uint8>() != 0;
+                    state.paidPoints = fields[3].Get<uint32>();
                 } while (claims->NextRow());
 
-            // Completed, and the server stopped before it paid.
+            // Reached, and the server stopped before it paid; or the milestones changed.
             for (auto& [account, state] : accounts)
-                if (!state.logPaid && state.points >= settings.logPoints)
-                {
-                    state.logPaid = true;
-                    uncollected.push_back(account);
-                }
+            {
+                PendingReward reward;
+                if (TakeDueReward(state, account, month, reward))
+                    uncollected.push_back(reward);
+            }
         }
 
-        for (uint32 account : uncollected)
+        for (PendingReward& reward : uncollected)
         {
-            uint32 guid = 0;
-            if (QueryResult result = CharacterDatabase.Query("SELECT guid FROM characters WHERE account = {} ORDER BY logout_time DESC LIMIT 1", account))
-                guid = result->Fetch()[0].Get<uint32>();
+            if (QueryResult result = CharacterDatabase.Query("SELECT guid FROM characters WHERE account = {} ORDER BY logout_time DESC LIMIT 1", reward.account))
+                reward.guid = result->Fetch()[0].Get<uint32>();
             std::lock_guard<std::mutex> guard(stateLock);
-            pendingRewards.push_back({ account, guid, month, themes[theme].bonusItem });
+            pendingRewards.push_back(reward);
         }
 
     }
 
-    // Startup only, when no write is still on its way: a month that ended with its reward unpaid,
+    // Startup only, when no write is still on its way: a month that ended with a reward unpaid,
     // because the write failed or the server stopped first. A month's progress is no use after
     // that, so it goes; the claims stay as history.
     void RecoverPastRewards(uint32 month)
@@ -1054,26 +1149,38 @@ namespace
                     earned[{ fields[0].Get<uint32>(), pastMonth }] += activity->second.points;
             } while (result->NextRow());
 
-        std::set<std::pair<uint32, uint32>> paid;
-        if (QueryResult result = CharacterDatabase.Query("SELECT account, month FROM mod_trading_post_month WHERE month < {} AND log_paid = 1", month))
+        std::map<std::pair<uint32, uint32>, uint32> paid;       // account, month -> last milestone paid
+        std::set<std::pair<uint32, uint32>> finished;
+        if (QueryResult result = CharacterDatabase.Query("SELECT account, month, log_paid, log_points FROM mod_trading_post_month WHERE month < {}", month))
             do
             {
                 Field* fields = result->Fetch();
-                paid.emplace(fields[0].Get<uint32>(), fields[1].Get<uint32>());
+                std::pair<uint32, uint32> const key(fields[0].Get<uint32>(), fields[1].Get<uint32>());
+                paid[key] = fields[3].Get<uint32>();
+                if (fields[2].Get<uint8>())
+                    finished.insert(key);
             } while (result->NextRow());
 
         for (auto const& [key, points] : earned)
         {
-            if (points < settings.logPoints || paid.count(key))
+            if (finished.count(key))
                 continue;
 
-            uint32 guid = 0;
+            PendingReward reward;
+            reward.account = key.first;
+            auto const before = paid.find(key);
+            {
+                std::lock_guard<std::mutex> guard(stateLock);
+                if (!DueReward(before != paid.end() ? before->second : 0, points, key.second, reward))
+                    continue;
+            }
+
             if (QueryResult result = CharacterDatabase.Query("SELECT guid FROM characters WHERE account = {} ORDER BY logout_time DESC LIMIT 1", key.first))
-                guid = result->Fetch()[0].Get<uint32>();
+                reward.guid = result->Fetch()[0].Get<uint32>();
 
             LOG_INFO("server.loading", "mod-trading-post: paying account {} the Traveler's Log reward of month {}", key.first, key.second);
             std::lock_guard<std::mutex> guard(stateLock);
-            pendingRewards.push_back({ key.first, guid, key.second, themes[key.second % 100].bonusItem });
+            pendingRewards.push_back(reward);
         }
 
         CharacterDatabase.Execute("DELETE FROM mod_trading_post_progress WHERE month < {}", month);
@@ -1184,8 +1291,22 @@ void TradingPost::LoadConfig()
 {
     settings.enabled = sConfigMgr->GetOption<bool>("TradingPost.Enable", true);
     settings.cacheTender = sConfigMgr->GetOption<uint32>("TradingPost.Cache.Tender", 500);
-    settings.logTender = sConfigMgr->GetOption<uint32>("TradingPost.Log.Tender", 500);
-    settings.logPoints = std::max<uint32>(sConfigMgr->GetOption<uint32>("TradingPost.Log.Points", 1000), 1);
+    std::string const milestoneText = sConfigMgr->GetOption<std::string>("TradingPost.Log.Milestones", DEFAULT_MILESTONES);
+    std::vector<Milestone> milestones = ParseMilestones(milestoneText);
+    if (milestones.empty())
+    {
+        LOG_ERROR("server.loading", "mod-trading-post: TradingPost.Log.Milestones '{}' can't be read; using '{}'", milestoneText, DEFAULT_MILESTONES);
+        milestones = ParseMilestones(DEFAULT_MILESTONES);
+    }
+    uint32 tender = 0;
+    for (Milestone const& milestone : milestones)
+        tender += milestone.tender;
+    settings.logTender = tender;
+    settings.logPoints = milestones.back().points;
+    {
+        std::lock_guard<std::mutex> guard(stateLock);
+        settings.milestones = std::move(milestones);
+    }
     settings.flushMs = std::max<uint32>(sConfigMgr->GetOption<uint32>("TradingPost.Log.SaveSeconds", 30), 5) * IN_MILLISECONDS;
     settings.accountWide = sConfigMgr->GetOption<bool>("TradingPost.AccountWideSpells", true);
     settings.progressionGate = sConfigMgr->GetOption<bool>("TradingPost.ProgressionGate", true);
@@ -1417,11 +1538,10 @@ void TradingPost::Progress(Player* player, ActivityType type, uint32 target, uin
         if (state)
         {
             total = state->points;
-            if (!state->logPaid && state->points >= settings.logPoints)
-            {
-                state->logPaid = true;
-                pendingRewards.push_back({ account, guid, currentMonth, themes[currentTheme].bonusItem });
-            }
+            PendingReward reward;
+            reward.guid = guid;
+            if (TakeDueReward(*state, account, currentMonth, reward))
+                pendingRewards.push_back(reward);
         }
         wantsAddon = addonPlayers.count(guid) != 0;
     }
@@ -1452,8 +1572,10 @@ void TradingPost::Update(uint32 diff)
 
         if (!failedRewards.empty())
         {
+            for (PendingReward const& reward : failedRewards)
+                rewardsInFlight.erase(reward.account);
             std::lock_guard<std::mutex> guard(stateLock);
-            pendingRewards.insert(pendingRewards.end(), failedRewards.begin(), failedRewards.end());
+            pendingRewards.insert(pendingRewards.begin(), failedRewards.begin(), failedRewards.end());
             failedRewards.clear();
         }
 

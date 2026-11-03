@@ -2,7 +2,7 @@
 ## Title: Trading Post
 ## Notes: Retail's Trading Post and Traveler's Log: a themed shop each month at a proprietor in Stormwind and Orgrimmar, paid for in Trader's Tender earned from the month's activities. /tlog opens the log. Backed by the mod-trading-post server module.
 ## Author: buildthehomelab
-## Version: 1.2.0
+## Version: 1.3.0
 ## OptionalDeps: DragonUI, Journal
 ## SavedVariables: TradingPostDB
 
