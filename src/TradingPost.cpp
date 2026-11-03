@@ -57,6 +57,14 @@
 #include "WorldSession.h"
 #include "WorldSessionMgr.h"
 
+// A core with home screens keeps a character row per account that nobody plays. Other cores have none.
+#if __has_include("HomeViewer.h")
+#include "HomeViewer.h"
+#else
+#define SQL_NOT_HOME_VIEWER "1"
+inline bool IsHomeViewer(Player const*) { return false; }
+#endif
+
 #include <algorithm>
 #include <charconv>
 #include <ctime>
@@ -1115,7 +1123,7 @@ namespace
 
         for (PendingReward& reward : uncollected)
         {
-            if (QueryResult result = CharacterDatabase.Query("SELECT guid FROM characters WHERE account = {} ORDER BY logout_time DESC LIMIT 1", reward.account))
+            if (QueryResult result = CharacterDatabase.Query("SELECT guid FROM characters WHERE account = {} AND " SQL_NOT_HOME_VIEWER " ORDER BY logout_time DESC LIMIT 1", reward.account))
                 reward.guid = result->Fetch()[0].Get<uint32>();
             std::lock_guard<std::mutex> guard(stateLock);
             pendingRewards.push_back(reward);
@@ -1175,7 +1183,7 @@ namespace
                     continue;
             }
 
-            if (QueryResult result = CharacterDatabase.Query("SELECT guid FROM characters WHERE account = {} ORDER BY logout_time DESC LIMIT 1", key.first))
+            if (QueryResult result = CharacterDatabase.Query("SELECT guid FROM characters WHERE account = {} AND " SQL_NOT_HOME_VIEWER " ORDER BY logout_time DESC LIMIT 1", key.first))
                 reward.guid = result->Fetch()[0].Get<uint32>();
 
             LOG_INFO("server.loading", "mod-trading-post: paying account {} the Traveler's Log reward of month {}", key.first, key.second);
@@ -1237,7 +1245,7 @@ namespace
 bool TradingPost::IsRealPlayer(Player* player)
 {
     WorldSession* session = player ? player->GetSession() : nullptr;
-    return session && !IsBotSession(session);
+    return session && !IsBotSession(session) && !IsHomeViewer(player);
 }
 
 bool TradingPost::Enabled()
