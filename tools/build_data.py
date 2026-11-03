@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Builds data/sql/db-world/mod_trading_post_world.sql.
 
-The twelve monthly themes, each with its stock, its Traveler's Log activities and its bonus reward.
+The twelve monthly themes, each with its stock and its bonus reward, and the Traveler's Log activities.
 Stock comes from data/stock.tsv. That file is committed, so the SQL can be rebuilt anywhere; make it
 afresh with --stock, which reads a retail Mount.csv and BattlePetSpecies.csv export and keeps what
 retail sells at the Trading Post, the item library has and no other shop sells:
@@ -50,43 +50,54 @@ THEMES = [
 KILL, KILL_ELITE, KILL_RARE, QUEST, DUNGEON_BOSS, RAID_BOSS, GATHER, FISH, CRAFT, BG_PLAY, BG_WIN, LEVEL, \
     ACHIEVEMENT, PVP_KILL = range(1, 15)
 
-BEAST, DRAGONKIN, DEMON, ELEMENTAL, GIANT, UNDEAD, HUMANOID, MECHANICAL = 1, 2, 3, 4, 5, 6, 7, 9
+BEAST, DRAGONKIN, DEMON, ELEMENTAL, GIANT, UNDEAD, HUMANOID = 1, 2, 3, 4, 5, 6, 7
 HERBALISM, MINING, SKINNING = 182, 186, 393
 
-# Every month: type, target, amount, points, name, description.
-EVERY_MONTH = [
-    (KILL, 0, 200, 75, "Keeping the Roads Clear", "Defeat 200 enemies that would give you experience."),
-    (QUEST, 0, 25, 100, "Odd Jobs", "Turn in 25 quests."),
-    (LEVEL, 0, 3, 75, "Onward and Upward", "Gain 3 levels on any character."),
-    (DUNGEON_BOSS, 0, 10, 100, "Delving Deep", "Defeat 10 dungeon bosses."),
-    (ACHIEVEMENT, 0, 3, 50, "Worth Mentioning", "Earn 3 achievements."),
-    (CRAFT, 0, 25, 75, "Made by Hand", "Craft 25 items with a profession."),
-    (GATHER, 0, 40, 75, "Out in the Field", "Gather from 40 herbs, mineral veins or skinnable creatures."),
-    (FISH, 0, 25, 50, "A Line in the Water", "Catch 25 fish."),
+# Every month: id, type, target, amount, points, name, description.
+#
+# Progress is stored by id, so an id keeps its meaning for good. The small steps come first: the log
+# should tick over within minutes of normal play and never ask for a long haul. The bigger steps of
+# a kind stay on the list for whoever gets there anyway. Nothing here is a must: the list offers well
+# over the points the log asks for, raids and PvP included but not needed.
+ACTIVITIES = [
+    (9, KILL, 0, 25, 25, "Road Work", "Defeat 25 enemies that would give you experience."),
+    (10, KILL, 0, 100, 50, "Roadside Menace", "Defeat 100 enemies that would give you experience."),
+    (1, KILL, 0, 200, 75, "Keeping the Roads Clear", "Defeat 200 enemies that would give you experience."),
+    (11, QUEST, 0, 1, 25, "A Helping Hand", "Turn in a quest."),
+    (12, QUEST, 0, 5, 50, "Odd Jobs", "Turn in 5 quests."),
+    (2, QUEST, 0, 15, 75, "Someone Has to Do It", "Turn in 15 quests."),
+    (14, DUNGEON_BOSS, 0, 1, 25, "Dungeon Crawl", "Defeat a dungeon boss."),
+    (15, DUNGEON_BOSS, 0, 5, 50, "Going Down", "Defeat 5 dungeon bosses."),
+    (4, DUNGEON_BOSS, 0, 10, 75, "Delving Deep", "Defeat 10 dungeon bosses."),
+    (13, LEVEL, 0, 1, 50, "Growing Pains", "Gain a level on any character."),
+    (3, LEVEL, 0, 3, 50, "Onward and Upward", "Gain 3 levels on any character."),
+    (16, ACHIEVEMENT, 0, 1, 25, "Noteworthy", "Earn an achievement."),
+    (5, ACHIEVEMENT, 0, 3, 50, "Worth Mentioning", "Earn 3 achievements."),
+    (17, CRAFT, 0, 1, 25, "Handmade", "Craft an item with a profession."),
+    (18, CRAFT, 0, 10, 50, "Busy Hands", "Craft 10 items with a profession."),
+    (6, CRAFT, 0, 25, 50, "Made by Hand", "Craft 25 items with a profession."),
+    (19, GATHER, 0, 10, 25, "A Walk in the Hills", "Gather from 10 herbs, mineral veins or skinnable creatures."),
+    (7, GATHER, 0, 30, 50, "Out in the Field", "Gather from 30 herbs, mineral veins or skinnable creatures."),
+    (30, GATHER, HERBALISM, 10, 25, "Green Thumb", "Pick 10 herbs."),
+    (31, GATHER, MINING, 10, 25, "Pick and Shovel", "Mine 10 mineral veins."),
+    (32, GATHER, SKINNING, 10, 25, "Leather Goods", "Skin 10 creatures."),
+    (37, FISH, 0, 5, 25, "Gone Fishing", "Catch 5 fish."),
+    (8, FISH, 0, 20, 50, "A Line in the Water", "Catch 20 fish."),
+    (20, KILL_RARE, 0, 1, 50, "Rare Sighting", "Defeat a rare creature."),
+    (21, KILL_ELITE, 0, 10, 25, "Tougher Than They Look", "Defeat 10 elite enemies that would give you experience."),
+    (22, KILL_ELITE, 0, 40, 50, "Tougher Than You Look", "Defeat 40 elite enemies that would give you experience."),
+    (23, KILL, BEAST, 25, 25, "Pelts and Fangs", "Defeat 25 beasts that would give you experience."),
+    (24, KILL, UNDEAD, 25, 25, "Back to the Grave", "Defeat 25 undead that would give you experience."),
+    (25, KILL, HUMANOID, 25, 25, "Bandit Season", "Defeat 25 humanoids that would give you experience."),
+    (26, KILL, DEMON, 15, 25, "Unwelcome Guests", "Defeat 15 demons that would give you experience."),
+    (27, KILL, ELEMENTAL, 15, 25, "Elemental Unrest", "Defeat 15 elementals that would give you experience."),
+    (28, KILL, DRAGONKIN, 10, 25, "Scale and Claw", "Defeat 10 dragonkin that would give you experience."),
+    (29, KILL, GIANT, 10, 25, "The Bigger They Are", "Defeat 10 giants that would give you experience."),
+    (33, RAID_BOSS, 0, 1, 50, "Bring Friends", "Defeat a raid boss."),
+    (34, BG_PLAY, 0, 1, 50, "Called to Battle", "Finish a battleground."),
+    (35, BG_WIN, 0, 1, 50, "Victory Lap", "Win a battleground."),
+    (36, PVP_KILL, 0, 5, 25, "Fair Fight", "Earn 5 honorable kills."),
 ]
-
-# Rotating: this many join the list above each month, in turn. Together a month offers well over
-# the 1,000 points the log asks for, so nobody has to do all of it.
-ROTATING = [
-    (KILL, BEAST, 80, 50, "Pelts and Fangs", "Defeat 80 beasts that would give you experience."),
-    (KILL, UNDEAD, 60, 50, "Back to the Grave", "Defeat 60 undead that would give you experience."),
-    (KILL, HUMANOID, 80, 50, "Bandit Season", "Defeat 80 humanoids that would give you experience."),
-    (KILL, DEMON, 30, 50, "Unwelcome Guests", "Defeat 30 demons that would give you experience."),
-    (KILL, ELEMENTAL, 40, 50, "Elemental Unrest", "Defeat 40 elementals that would give you experience."),
-    (KILL, DRAGONKIN, 20, 50, "Scale and Claw", "Defeat 20 dragonkin that would give you experience."),
-    (KILL, GIANT, 15, 50, "The Bigger They Are", "Defeat 15 giants that would give you experience."),
-    (KILL, MECHANICAL, 25, 50, "Spare Parts", "Defeat 25 mechanical enemies that would give you experience."),
-    (KILL_ELITE, 0, 40, 75, "Tougher Than They Look", "Defeat 40 elite enemies that would give you experience."),
-    (KILL_RARE, 0, 3, 100, "Rare Sightings", "Defeat 3 rare creatures."),
-    (RAID_BOSS, 0, 5, 150, "Bring Friends", "Defeat 5 raid bosses."),
-    (GATHER, HERBALISM, 30, 50, "Green Thumb", "Pick 30 herbs."),
-    (GATHER, MINING, 30, 50, "Pick and Shovel", "Mine 30 mineral veins."),
-    (GATHER, SKINNING, 30, 50, "Leather Goods", "Skin 30 creatures."),
-    (BG_PLAY, 0, 5, 75, "Called to Battle", "Finish 5 battlegrounds."),
-    (BG_WIN, 0, 3, 100, "Victory Laps", "Win 3 battlegrounds."),
-    (PVP_KILL, 0, 25, 75, "Fair Fight", "Earn 25 honorable kills."),
-]
-ROTATING_PER_MONTH = 10
 
 STOCK_COLUMNS = ["kind", "item", "retail_id", "name"]
 
@@ -228,18 +239,8 @@ def write_sql():
 
     rows = []
 
-    # Ids are the theme and place, so that a change to one month's list leaves the others' progress
-    # alone: progress is stored by id. Every month's come first, under 100.
-    def activity(activity_id, theme, entry, sort):
-        kind, target, amount, points, name, description = entry
-        rows.append(f"({activity_id}, {theme}, {kind}, {target}, {amount}, {points}, {sort}, {q(name)}, {q(description)})")
-
-    for sort, entry in enumerate(EVERY_MONTH, 1):
-        activity(sort, 0, entry, sort)
-    for number in range(1, len(THEMES) + 1):
-        for offset in range(ROTATING_PER_MONTH):
-            entry = ROTATING[((number - 1) * ROTATING_PER_MONTH + offset) % len(ROTATING)]
-            activity(number * 100 + offset + 1, number, entry, len(EVERY_MONTH) + offset + 1)
+    for sort, (activity_id, kind, target, amount, points, name, description) in enumerate(ACTIVITIES, 1):
+        rows.append(f"({activity_id}, 0, {kind}, {target}, {amount}, {points}, {sort}, {q(name)}, {q(description)})")
     out += ["INSERT INTO `mod_trading_post_activity` (`id`, `theme`, `type`, `target`, `amount`, `points`, `sort`, `name`, `description`) VALUES",
             ",\n".join(rows) + ";", ""]
 

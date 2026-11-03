@@ -26,20 +26,14 @@ TradingPost.Enable = 1
 TradingPost.Cache.Tender = 500
 
 #
-#    TradingPost.Log.Points
-#        Description: Traveler's Log points that complete the month.
-#        Default:     1000
+#    TradingPost.Log.Milestones
+#        Description: What the Traveler's Log pays along the way: points:Tender, comma separated,
+#                     points ascending. Each pays as soon as it's reached. The last completes the
+#                     month's log and comes with its bonus reward.
+#        Default:     "250:100,500:100,750:100,1000:200"
 #
 
-TradingPost.Log.Points = 1000
-
-#
-#    TradingPost.Log.Tender
-#        Description: Trader's Tender for completing the month's log, paid with its bonus reward.
-#        Default:     500
-#
-
-TradingPost.Log.Tender = 500
+TradingPost.Log.Milestones = "250:100,500:100,750:100,1000:200"
 
 #
 #    TradingPost.Log.SaveSeconds

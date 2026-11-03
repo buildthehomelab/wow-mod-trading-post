@@ -249,7 +249,26 @@ do
 	check(panel.bonus.name:GetText() == "" and panel.bonusWatch:IsShown(), "waits for the bonus item's name")
 	itemsKnown = true
 	tick(1)
-	check(panel.bonus.name:GetText() == "Armored Irontusk" and not panel.bonusWatch:IsShown(), "and shows it when it lands")
+	check(panel.bonus.name:GetText():find("^Armored Irontusk\n") and not panel.bonusWatch:IsShown(), "and shows it when it lands")
+	check(panel.bonus.name:GetText():find("at 1000 points", 1, true), "and when it comes")
+
+	-- The milestones: a diamond on the bar for each, and the next one's reward in the column.
+	check(#panel.markers == 1, "one diamond before the milestones are known")
+	check(panel.rewardTitle:GetText() == "Next Reward: 1000 Points" and panel.rewardTender:GetText() == "500", "the whole reward before they're known")
+	server("G:250:100:500:100:750:100:1000:200")
+	server("S:900:202611:300:1000:0:0:500:500:864000:0:401")
+	check(#T.milestones == 4 and T.milestones[2].points == 500 and T.milestones[4].tender == 200, "milestones read")
+	check(#panel.markers == 4, "a diamond for each milestone")
+	check(panel.rewardTitle:GetText() == "Next Reward: 500 Points" and panel.rewardTender:GetText() == "100", "the next milestone: " .. panel.rewardTitle:GetText())
+	server("S:900:202611:750:1000:0:0:500:500:864000:0:401")
+	check(panel.rewardTitle:GetText() == "Next Reward: 1000 Points" and panel.rewardTender:GetText() == "200", "a milestone reached moves on")
+	server("S:900:202611:1000:1000:0:1:500:500:864000:0:401")
+	check(panel.rewardTitle:GetText():find("Reward Earned", 1, true) and panel.rewardTender:GetText() == "500", "all earned")
+	server("G:1000:500")
+	server("S:900:202611:175:1000:0:0:500:500:864000:0:401")
+	check(panel.markers[1]:IsShown() and not panel.markers[2]:IsShown(), "fewer milestones hide the spare diamonds")
+	server("G:250:100:500:100:750:100:1000:200")
+	server("S:900:202611:175:1000:0:0:500:500:864000:0:401")
 end
 
 -- The shop.

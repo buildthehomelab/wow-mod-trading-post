@@ -7,10 +7,12 @@ Doing them earns **Trader's Tender**, an account-wide currency that buys what's 
 
 ## How it works
 
-- **Traveler's Log.** Each month lists 18 activities: kills, quests, dungeon and raid bosses,
-  crafting, gathering, fishing, battlegrounds and more. Progress counts for the whole account, and
-  bots don't count. 1,000 points pay 500 Tender and the month's bonus reward. A month offers more
-  than 1,000 points, so nobody has to do all of it. `/tlog` opens it; with the Journal addon of
+- **Traveler's Log.** Each month lists 37 activities: kills, quests, dungeon and raid bosses,
+  crafting, gathering, fishing, battlegrounds and more. Most start at a single action, so it ticks
+  over during normal play. Progress counts for the whole account, and bots don't count. It pays as
+  you go: 100 Tender each at 250, 500 and 750 points, then 200 and the month's bonus reward at 1,000.
+  A month offers 1,450 points, so nobody has to do all of it, and raids and PvP are never needed.
+  `/tlog` opens it; with the Journal addon of
   [mod-forever-journal](https://github.com/buildthehomelab/wow-mod-forever-journal) it's a tab there.
 - **Collector's Cache.** 500 Tender once a month per account, taken at a proprietor.
 - **Trading Post.** A proprietor by the auction house in Stormwind and in Orgrimmar opens a window
@@ -94,9 +96,10 @@ Category: Features
 - **The Trading Post is open.** Find a proprietor by the auction house in Stormwind or Orgrimmar.
   Every month brings a new theme and a new shelf of mounts and companions, each with a model to
   turn, zoom and move around before you buy. The view is remembered for each one.
-- **The Traveler's Log** lists 18 things to do each month, from quests and bosses to crafting,
-  fishing and battlegrounds. Everything your account does counts. Reach 1,000 points for 500
-  Trader's Tender and the month's bonus mount. Open it with /tlog or from the Journal.
+- **The Traveler's Log** lists 37 things to do each month, from quests and bosses to crafting,
+  fishing and battlegrounds, and most start with just one. Everything your account does counts, and
+  you don't need all of it. It pays 100 Trader's Tender each at 250, 500 and 750 points, then 200
+  and the month's bonus mount at 1,000. Open it with /tlog or from the Journal.
 - **The Collector's Cache** holds another 500 Tender every month. Just visit a proprietor to take it.
 - **Freeze** one item you can't afford yet, and it stays on sale for you until you buy it.
 - Your Tender shows in the Currency tab.
