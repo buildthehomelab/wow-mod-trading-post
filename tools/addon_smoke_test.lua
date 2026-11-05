@@ -263,7 +263,7 @@ do
 	server("S:900:202611:750:1000:0:0:500:500:864000:0:401")
 	check(panel.rewardTitle:GetText() == "Next Reward: 1000 Points" and panel.rewardTender:GetText() == "200", "a milestone reached moves on")
 	server("S:900:202611:1000:1000:0:1:500:500:864000:0:401")
-	check(panel.rewardTitle:GetText():find("Reward Earned", 1, true) and panel.rewardTender:GetText() == "500", "all earned")
+	check(panel.rewardTitle:GetText():find("Earned This Month", 1, true) and panel.rewardTender:GetText() == "500", "all earned")
 	server("G:1000:500")
 	server("S:900:202611:175:1000:0:0:500:500:864000:0:401")
 	check(panel.markers[1]:IsShown() and not panel.markers[2]:IsShown(), "fewer milestones hide the spare diamonds")

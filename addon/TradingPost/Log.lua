@@ -157,7 +157,7 @@ local function refreshReward(panel, state)
 		panel.rewardTitle:SetText("Next Reward: " .. nextUp.points .. " Points")
 		panel.rewardTender:SetText(nextUp.tender)
 	else
-		panel.rewardTitle:SetText("|cff33cc33Reward Earned|r")
+		panel.rewardTitle:SetText("|cff33cc33Earned This Month|r")
 		panel.rewardTender:SetText(state.logPays)
 	end
 
