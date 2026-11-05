@@ -246,7 +246,7 @@ INSERT INTO `creature_template_model` (`CreatureID`, `Idx`, `CreatureDisplayID`,
 (9509001, 0, 8001, 1, 1);
 DELETE FROM `creature` WHERE `guid` IN (9509000, 9509001);
 INSERT INTO `creature` (`guid`, `id`, `map`, `spawnMask`, `phaseMask`, `position_x`, `position_y`, `position_z`, `orientation`, `spawntimesecs`, `curhealth`, `Comment`) VALUES
-(9509000, 9509000, 0, 1, 1, -8806.2, 664.6, 96.2, 1.56, 300, 1, 'mod-trading-post: Stormwind, by the auction house'),
+(9509000, 9509000, 0, 1, 1, -8800.73, 665.19, 96.2, 3.27, 300, 1, 'mod-trading-post: Stormwind, by the auction house'),
 (9509001, 9509001, 1, 1, 1, 1674.7, -4440.0, 19.2, 5.35, 300, 1, 'mod-trading-post: Orgrimmar, by the auction house');
 DELETE FROM `gossip_menu` WHERE `MenuID` = 9509000;
 INSERT INTO `gossip_menu` (`MenuID`, `TextID`) VALUES (9509000, 9509000);

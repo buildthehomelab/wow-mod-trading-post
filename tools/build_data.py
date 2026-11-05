@@ -260,7 +260,7 @@ def write_sql():
         f"({NPC_HORDE}, 0, 8001, 1, 1);",
         f"DELETE FROM `creature` WHERE `guid` IN ({NPC_ALLIANCE}, {NPC_HORDE});",
         "INSERT INTO `creature` (`guid`, `id`, `map`, `spawnMask`, `phaseMask`, `position_x`, `position_y`, `position_z`, `orientation`, `spawntimesecs`, `curhealth`, `Comment`) VALUES",
-        f"({NPC_ALLIANCE}, {NPC_ALLIANCE}, 0, 1, 1, -8806.2, 664.6, 96.2, 1.56, 300, 1, 'mod-trading-post: Stormwind, by the auction house'),",
+        f"({NPC_ALLIANCE}, {NPC_ALLIANCE}, 0, 1, 1, -8800.73, 665.19, 96.2, 3.27, 300, 1, 'mod-trading-post: Stormwind, by the auction house'),",
         f"({NPC_HORDE}, {NPC_HORDE}, 1, 1, 1, 1674.7, -4440.0, 19.2, 5.35, 300, 1, 'mod-trading-post: Orgrimmar, by the auction house');",
         f"DELETE FROM `gossip_menu` WHERE `MenuID` = {TEXT_NO_ADDON};",
         f"INSERT INTO `gossip_menu` (`MenuID`, `TextID`) VALUES ({TEXT_NO_ADDON}, {TEXT_NO_ADDON});",
